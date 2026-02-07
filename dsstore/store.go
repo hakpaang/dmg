@@ -21,7 +21,7 @@ const (
 type IconViewOptions struct {
 	IconSize  float64 // Icon size in pixels (default: 128)
 	TextSize  float64 // Label text size in points (default: 12)
-	GridSpace float64 // Grid spacing between icons (default: 100)
+	GridSpace float64 // Grid spacing between icons (default: 100, max: 100)
 	GridOffX  float64 // Horizontal grid offset
 	GridOffY  float64 // Vertical grid offset
 
@@ -114,6 +114,10 @@ func (s *Store) SetIconViewOptions(opts IconViewOptions) {
 	}
 	if opts.GridSpace == 0 {
 		opts.GridSpace = 100
+	} else if opts.GridSpace > 100 {
+		// macOS Finder silently rejects the entire icvp plist if gridSpacing > 100,
+		// causing all icon view settings to be ignored.
+		opts.GridSpace = 100
 	}
 
 	m := map[string]interface{}{
@@ -133,7 +137,11 @@ func (s *Store) SetIconViewOptions(opts IconViewOptions) {
 
 	switch opts.BackgroundType {
 	case BackgroundDefault:
-		m["backgroundType"] = 0
+		// Finder rejects backgroundType=0, so use white color as default
+		m["backgroundType"] = 1
+		m["backgroundColorRed"] = float64(1)
+		m["backgroundColorGreen"] = float64(1)
+		m["backgroundColorBlue"] = float64(1)
 	case BackgroundColor:
 		m["backgroundType"] = 1
 		m["backgroundColorRed"] = opts.BackgroundRed

@@ -172,12 +172,19 @@ func buildLeafNodes(records []Record) []leafNode {
 }
 
 // serializeLeafNode creates a leaf node: [mode=0 (u32)] [count (u32)] [records...].
+// The node is padded to at least pageSize bytes so the buddy allocator assigns a
+// block large enough for Finder to read using the pageSize declared in the DSDB
+// master block. Without this padding, Finder may ignore icvp and other records.
 func serializeLeafNode(records []Record) []byte {
 	buf := new(bytes.Buffer)
 	writeU32(buf, 0)                    // mode = 0 (leaf)
 	writeU32(buf, uint32(len(records))) // count
 	for _, rec := range records {
 		rec.WriteTo(buf)
+	}
+	// Pad to pageSize so buddy allocator allocates a full page
+	for buf.Len() < pageSize {
+		buf.WriteByte(0)
 	}
 	return buf.Bytes()
 }

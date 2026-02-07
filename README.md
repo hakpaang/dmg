@@ -54,6 +54,77 @@ func main() {
 }
 ```
 
+## API Reference
+
+### Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `VolumeName` | `string` | Volume name displayed in Finder title bar |
+| `OutputPath` | `string` | Output path for the final DMG file |
+| `Files` | `map[string]string` | Files to include (destination name -> source path) |
+| `AddApplicationsSymlink` | `bool` | Create `/Applications` symlink for drag-to-install |
+| `Window` | `WindowConfig` | Finder window position and size |
+| `Icon` | `IconConfig` | Icon appearance settings |
+| `Background` | `*BackgroundConfig` | Window background (nil for default white) |
+| `Format` | `Format` | Compression format (default: `FormatUDZO`) |
+| `Filesystem` | `Filesystem` | `FSHFSPlus` (default) or `FSAPFS` |
+| `SizeHint` | `int` | Writable DMG size in MB (0 = auto-calculated) |
+| `VolumeIcon` | `string` | Path to `.icns` file for volume icon |
+
+### WindowConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `X` | `int` | Window X position on screen |
+| `Y` | `int` | Window Y position on screen |
+| `Width` | `int` | Window width in pixels |
+| `Height` | `int` | Window height in pixels |
+
+### IconConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Size` | `int` | Icon size in pixels (default: 128) |
+| `TextSize` | `float64` | Label text size in points (default: 12) |
+| `GridSpace` | `float64` | Grid spacing between icons (default: 100, max: 100) |
+
+> **Note:** macOS Finder silently rejects all icon view settings if `GridSpace` exceeds 100. Values above 100 are automatically clamped.
+
+### BackgroundConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `File` | `string` | Path to background image (PNG, JPEG, etc.) |
+| `Color` | `*ColorRGB` | Solid color background (used when `File` is empty) |
+
+When neither `File` nor `Color` is set, the DMG uses a default white background.
+
+### ColorRGB
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `R` | `float64` | Red component (0.0 - 1.0) |
+| `G` | `float64` | Green component (0.0 - 1.0) |
+| `B` | `float64` | Blue component (0.0 - 1.0) |
+
+### Background Image Helpers
+
+The library includes helper functions for generating background images:
+
+```go
+// Solid color background
+dmg.SolidBackground(width, height int, c color.Color, path string) error
+
+// Gradient background
+dmg.GradientBackground(width, height int, from, to color.Color,
+    direction GradientDirection, path string) error
+
+// Installer-style background with icon wells and arrow
+dmg.InstallerBackground(width, height int, from, to color.Color,
+    slots []IconSlot, iconSize int, path string) error
+```
+
 ## Compression Formats
 
 | Format | Constant | Notes |

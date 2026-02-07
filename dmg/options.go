@@ -74,7 +74,7 @@ type WindowConfig struct {
 type IconConfig struct {
 	Size      int     // Icon size in pixels (default: 128)
 	TextSize  float64 // Label text size in points (default: 12)
-	GridSpace float64 // Grid spacing between icons (default: 100)
+	GridSpace float64 // Grid spacing between icons (default: 100, max: 100)
 }
 
 // BackgroundConfig defines the Finder window background.
