@@ -19,3 +19,27 @@
 
 # Go workspace file
 go.work
+
+# macOS
+.DS_Store
+
+# Binaries
+/dscompare
+cmd/single_test/test-dmg
+
+# Test DMGs and artifacts
+*.dmg
+test-dmgs/*.dmg
+test-dmgs/golden/*.dmg
+test-dmgs/ref/
+test-dmgs/go-dsstore/
+test-dmgs/go-fresh.dsstore
+test-dmgs/python-fresh.dsstore
+test-dmgs/finder-screenshot.png
+
+# Python venv
+.venv/
+
+# IDE
+.idea/
+.vscode/
