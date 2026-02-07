@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"image"
 	"image/color"
-	"image/png"
 	"os"
 	"path/filepath"
 
@@ -23,15 +21,34 @@ func main() {
 	os.WriteFile(filepath.Join(appDir, "MyApp"), []byte("#!/bin/sh\necho hello\n"), 0755)
 	appPath := filepath.Join(tmpDir, "MyApp.app")
 
-	// Create background images
+	// Create background images using the dmg package helpers
 	bgBlue := filepath.Join(tmpDir, "bg-blue.png")
-	createGradientImage(bgBlue, 600, 400, color.RGBA{30, 60, 120, 255}, color.RGBA{80, 140, 220, 255})
+	dmg.GradientBackground(600, 400,
+		color.RGBA{R: 30, G: 60, B: 120, A: 255},
+		color.RGBA{R: 80, G: 140, B: 220, A: 255},
+		dmg.GradientTopToBottom, bgBlue)
 
 	bgDark := filepath.Join(tmpDir, "bg-dark.png")
-	createGradientImage(bgDark, 540, 380, color.RGBA{30, 30, 30, 255}, color.RGBA{60, 60, 80, 255})
+	dmg.GradientBackground(540, 380,
+		color.RGBA{R: 30, G: 30, B: 30, A: 255},
+		color.RGBA{R: 60, G: 60, B: 80, A: 255},
+		dmg.GradientTopToBottom, bgDark)
 
 	bgGreen := filepath.Join(tmpDir, "bg-green.png")
-	createGradientImage(bgGreen, 700, 500, color.RGBA{20, 80, 20, 255}, color.RGBA{60, 180, 80, 255})
+	dmg.GradientBackground(700, 500,
+		color.RGBA{R: 20, G: 80, B: 20, A: 255},
+		color.RGBA{R: 60, G: 180, B: 80, A: 255},
+		dmg.GradientTopToBottom, bgGreen)
+
+	// Create an installer-style background with icon wells and arrow
+	bgInstaller := filepath.Join(tmpDir, "bg-installer.png")
+	dmg.InstallerBackground(540, 380,
+		color.RGBA{R: 40, G: 40, B: 70, A: 255},
+		color.RGBA{R: 70, G: 70, B: 120, A: 255},
+		[]dmg.IconSlot{
+			{X: 180, Y: 170, Label: "App"},
+			{X: 360, Y: 170, Label: "Applications"},
+		}, 128, bgInstaller)
 
 	tests := []struct {
 		name string
@@ -120,6 +137,18 @@ func main() {
 				Format:     dmg.FormatUDZO,
 			},
 		},
+		{
+			name: "08-installer-style",
+			opts: dmg.Options{
+				VolumeName: "Installer Style",
+				Files:      map[string]string{"MyApp.app": appPath},
+				AddApplicationsSymlink: true,
+				Window:     dmg.WindowConfig{X: 200, Y: 200, Width: 540, Height: 380},
+				Icon:       dmg.IconConfig{Size: 128, TextSize: 12, GridSpace: 100},
+				Background: &dmg.BackgroundConfig{File: bgInstaller},
+				Format:     dmg.FormatUDZO,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,18 +169,3 @@ func main() {
 	fmt.Println("Open them with: open /Users/leaanthony/Downloads/dmg-upstream/test-dmgs/*.dmg")
 }
 
-func createGradientImage(path string, w, h int, topColor, bottomColor color.RGBA) {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		t := float64(y) / float64(h-1)
-		r := uint8(float64(topColor.R)*(1-t) + float64(bottomColor.R)*t)
-		g := uint8(float64(topColor.G)*(1-t) + float64(bottomColor.G)*t)
-		b := uint8(float64(topColor.B)*(1-t) + float64(bottomColor.B)*t)
-		for x := 0; x < w; x++ {
-			img.Set(x, y, color.RGBA{r, g, b, 255})
-		}
-	}
-	f, _ := os.Create(path)
-	defer f.Close()
-	png.Encode(f, img)
-}
