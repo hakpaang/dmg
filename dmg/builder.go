@@ -106,6 +106,17 @@ func Build(opts Options) error {
 		return fmt.Errorf("convert DMG: %w", err)
 	}
 
+	// Step 12: Set file icon on the final DMG (if configured)
+	if opts.FileIcon != "" {
+		icnsData, err := readIconData(opts.FileIcon)
+		if err != nil {
+			return fmt.Errorf("read file icon: %w", err)
+		}
+		if err := setFileIcon(opts.OutputPath, icnsData); err != nil {
+			return fmt.Errorf("set file icon: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -145,6 +156,9 @@ func BuildWithContents(volumeName, outputPath string, contents []ContentItem, op
 		}
 		if opts.VolumeIcon != "" {
 			o.VolumeIcon = opts.VolumeIcon
+		}
+		if opts.FileIcon != "" {
+			o.FileIcon = opts.FileIcon
 		}
 		if opts.SizeHint > 0 {
 			o.SizeHint = opts.SizeHint
@@ -259,16 +273,20 @@ func copyBackground(bgPath, mountPoint string) (string, error) {
 	return bgName, nil
 }
 
-// copyVolumeIcon copies the .icns file and sets the volume icon flag.
+// copyVolumeIcon copies the icon as .VolumeIcon.icns and sets the custom icon flag.
+// Accepts .icns files directly, or .png/.jpg which are auto-converted to ICNS.
 func copyVolumeIcon(iconPath, mountPoint string) error {
-	dst := filepath.Join(mountPoint, ".VolumeIcon.icns")
-	if err := dittoCopy(iconPath, dst); err != nil {
-		return err
+	icnsData, err := readIconData(iconPath)
+	if err != nil {
+		return fmt.Errorf("read volume icon: %w", err)
 	}
-	// Set custom icon attribute on the volume root
-	cmd := exec.Command("SetFile", "-a", "C", mountPoint)
-	cmd.Run() // best-effort, SetFile may not be available
-	return nil
+
+	dst := filepath.Join(mountPoint, ".VolumeIcon.icns")
+	if err := os.WriteFile(dst, icnsData, 0644); err != nil {
+		return fmt.Errorf("write .VolumeIcon.icns: %w", err)
+	}
+
+	return setCustomIconFlag(mountPoint)
 }
 
 // generateDSStore creates the .DS_Store file on the mounted volume.

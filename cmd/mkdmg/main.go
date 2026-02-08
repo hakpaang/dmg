@@ -38,7 +38,10 @@ func main() {
 	bgColor := flag.String("bg-color", "", "Background color as R,G,B floats (e.g. 0.9,0.9,0.9)")
 
 	// Volume icon
-	volumeIcon := flag.String("volume-icon", "", "Path to .icns file for volume icon")
+	volumeIcon := flag.String("volume-icon", "", "Path to icon file (.icns, .png, .jpg) for mounted volume")
+
+	// File icon (icon of the .dmg file itself in Finder)
+	fileIcon := flag.String("file-icon", "", "Path to icon file (.icns, .png, .jpg) for the DMG file in Finder")
 
 	// Size
 	sizeHint := flag.Int("size", 0, "DMG size hint in MB (0 = auto-calculate)")
@@ -73,7 +76,7 @@ func main() {
 			*winX, *winY, *winWidth, *winHeight,
 			*iconSize, *textSize, *gridSpace,
 			*bgImage, *bgColor,
-			*volumeIcon, *sizeHint,
+			*volumeIcon, *fileIcon, *sizeHint,
 		)
 	}
 
@@ -119,7 +122,7 @@ func buildOptionsFromFlags(
 	winX, winY, winWidth, winHeight int,
 	iconSize int, textSize, gridSpace float64,
 	bgImage, bgColor string,
-	volumeIcon string, sizeHint int,
+	volumeIcon, fileIcon string, sizeHint int,
 ) dmg.Options {
 	opts := dmg.Options{
 		VolumeName:             volName,
@@ -135,6 +138,7 @@ func buildOptionsFromFlags(
 			Size: iconSize, TextSize: textSize, GridSpace: gridSpace,
 		},
 		VolumeIcon: volumeIcon,
+		FileIcon:   fileIcon,
 		SizeHint:   sizeHint,
 	}
 
@@ -183,6 +187,7 @@ type jsonConfig struct {
 	AddApplicationsSymlink *bool             `json:"applications_symlink"`
 	Background             *jsonBackground   `json:"background"`
 	VolumeIcon             string            `json:"volume_icon"`
+	FileIcon               string            `json:"file_icon"`
 	SizeHint               int               `json:"size_hint"`
 	Window                 *jsonWindow       `json:"window"`
 	Icon                   *jsonIcon         `json:"icon"`
@@ -222,6 +227,7 @@ func loadConfig(path string) (dmg.Options, error) {
 		OutputPath: cfg.OutputPath,
 		Files:      cfg.Files,
 		VolumeIcon: cfg.VolumeIcon,
+		FileIcon:   cfg.FileIcon,
 		SizeHint:   cfg.SizeHint,
 	}
 

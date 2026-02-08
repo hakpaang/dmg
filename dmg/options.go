@@ -58,8 +58,14 @@ type Options struct {
 	// If 0, it's calculated automatically from the file sizes + overhead.
 	SizeHint int
 
-	// VolumeIcon is the path to a .icns file for the volume icon (optional).
+	// VolumeIcon is the path to an icon file for the mounted volume (optional).
+	// Accepts .icns files directly, or .png/.jpg files which are auto-converted.
 	VolumeIcon string
+
+	// FileIcon is the path to an icon file for the DMG file itself in Finder (optional).
+	// This sets the icon shown on the .dmg file before it's mounted.
+	// Accepts .icns files directly, or .png/.jpg files which are auto-converted.
+	FileIcon string
 }
 
 // WindowConfig defines the Finder window position and size.

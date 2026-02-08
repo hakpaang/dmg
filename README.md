@@ -11,8 +11,12 @@ A pure Go library for creating styled macOS DMG disk images with custom Finder w
 - Applications symlink for drag-to-install
 - Multiple compression formats (zlib, LZFSE, LZMA, bzip2)
 - HFS+ and APFS filesystem support
-- Volume icons (.icns)
+- Volume icons (icon shown when DMG is mounted)
+- DMG file icons (icon shown on the .dmg file in Finder)
+- Accepts `.icns`, `.png`, `.jpg`, and macOS Tahoe `.icon` packages as icon input
+- Pure Go icon handling via extended attributes (no Xcode/`SetFile` dependency)
 - Pure Go .DS_Store generation (no AppleScript/Finder scripting)
+- ICNS generation from PNG images (`icns` sub-package)
 
 ## Installation
 
@@ -45,7 +49,9 @@ func main() {
         Background: &dmg.BackgroundConfig{
             File: "/path/to/background.png",
         },
-        Format: dmg.FormatUDZO,
+        VolumeIcon: "icon.png",     // icon when DMG is mounted
+        FileIcon:   "icon.png",     // icon of the .dmg file in Finder
+        Format:     dmg.FormatUDZO,
     }
 
     if err := dmg.Build(opts); err != nil {
@@ -53,6 +59,46 @@ func main() {
     }
 }
 ```
+
+## Icons
+
+The library supports two distinct icon types:
+
+| Icon Type | What It Is | Option |
+|-----------|-----------|--------|
+| **Volume Icon** | Shown when the DMG is mounted in Finder | `VolumeIcon` |
+| **File Icon** | Shown on the `.dmg` file itself in Finder | `FileIcon` |
+
+Both options accept any of the following formats:
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| ICNS | `.icns` | Used directly |
+| PNG | `.png` | Auto-converted to ICNS |
+| JPEG | `.jpg`, `.jpeg` | Auto-converted to ICNS |
+| Liquid Glass | `.icon` (directory) | macOS Tahoe format - layers composited and converted to ICNS |
+
+Icons are set using pure Go extended attribute manipulation (`com.apple.FinderInfo` and `com.apple.ResourceFork`), with no dependency on Xcode or the `SetFile` command.
+
+## ICNS Package
+
+The `icns` sub-package can be used independently to create Apple Icon Image (`.icns`) files from Go images:
+
+```go
+import "github.com/leaanthony/dmg/icns"
+
+// Convert a PNG file to ICNS
+err := icns.EncodeFile("output.icns", "source.png")
+
+// Or work with Go images directly
+img := loadMyImage()
+data, err := icns.IcnsFromImage(img)
+
+// Read a macOS Tahoe .icon package
+composited, err := icns.ReadDotIcon("AppIcon.icon")
+```
+
+The encoder generates standard ICNS entries for all sizes from 16x16 up to 1024x1024, using a box-filter downscale for high quality results.
 
 ## API Reference
 
@@ -70,7 +116,8 @@ func main() {
 | `Format` | `Format` | Compression format (default: `FormatUDZO`) |
 | `Filesystem` | `Filesystem` | `FSHFSPlus` (default) or `FSAPFS` |
 | `SizeHint` | `int` | Writable DMG size in MB (0 = auto-calculated) |
-| `VolumeIcon` | `string` | Path to `.icns` file for volume icon |
+| `VolumeIcon` | `string` | Path to icon file for the mounted volume |
+| `FileIcon` | `string` | Path to icon file for the .dmg file in Finder |
 
 ### WindowConfig
 
@@ -135,6 +182,39 @@ dmg.InstallerBackground(width, height int, from, to color.Color,
 | bzip2 | `FormatUDBZ` | Deprecated |
 | Uncompressed | `FormatUDRW` | For development |
 
+## CLI Tool
+
+The `mkdmg` command-line tool provides a quick way to create DMGs:
+
+```bash
+go install github.com/leaanthony/dmg/cmd/mkdmg@latest
+
+mkdmg -app /path/to/MyApp.app -output MyApp.dmg \
+  -volume-icon icon.png \
+  -file-icon icon.png \
+  -background bg.png
+```
+
+Or use a JSON config file:
+
+```json
+{
+  "volume_name": "MyApp",
+  "output": "MyApp.dmg",
+  "files": { "MyApp.app": "/path/to/MyApp.app" },
+  "applications_symlink": true,
+  "volume_icon": "icon.png",
+  "file_icon": "icon.png",
+  "background": { "file": "background.png" },
+  "window": { "x": 200, "y": 200, "width": 540, "height": 380 },
+  "icon": { "size": 128, "text_size": 12, "grid_space": 100 }
+}
+```
+
+```bash
+mkdmg -config dmg.json
+```
+
 ## Requirements
 
 - macOS (uses `hdiutil` for DMG creation)
@@ -149,6 +229,8 @@ Instead of using AppleScript or Finder automation (which is slow and fragile), t
 - `icvl` - Default view type
 - `vSrn` - Version marker
 - `Iloc` - Individual icon positions
+
+Volume icons are set by writing `.VolumeIcon.icns` to the volume root and setting the `kHasCustomIcon` flag in `com.apple.FinderInfo`. File icons use a Classic Mac OS resource fork written to the `com.apple.ResourceFork` extended attribute. Both are handled in pure Go with no dependency on Xcode tools.
 
 ## License
 
