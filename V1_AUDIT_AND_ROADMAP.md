@@ -33,9 +33,19 @@ build tags + `IconPositions`)._
 > **The full pure-Go DMG chain now works:** `hfsplus.Build` → `udif.Build` → a `.dmg` that
 > `hdiutil verify` accepts and Finder mounts — built with zero macOS dependency.
 >
-> **Remaining for the Wails backend (not the writer itself):** wire this behind
-> `dmg.Build()` as `nativeBackend` (walk a source dir → `Volume`, generate `.DS_Store`/icons),
-> and verify a real signed `.app` launches from a case-sensitive volume. See §5 below.
+> **Faithfulness gate passed + case mode resolved.** A real ad-hoc-signed `.app` packaged
+> through the pure-Go chain passes `codesign --verify --strict` when mounted — proving every
+> byte and the exec bit survive (a far stronger check than content round-trips). Volumes now
+> default to **case-insensitive HFS+** (`H+`, the platform convention for distribution images);
+> `Volume.CaseSensitive` opts into HFSX. The case-insensitive comparator is ASCII-correct
+> (matches macOS fold exactly for ASCII, which covers app-bundle names) and **errors rather
+> than corrupts** on non-ASCII names. Both modes are codesign-verified in CI tests.
+>
+> **The HFS+ writer is functionally complete.** Remaining work is integration, not the writer:
+> wire it behind `dmg.Build()` as `nativeBackend` (walk source dir → `Volume`, generate
+> `.DS_Store`/icons), and — tracked follow-ups — a full TN1150 Unicode fold table (for
+> non-ASCII case-insensitive names) and resource-fork data (not needed by modern `.app`s).
+> See §5 below.
 
 ## 1. Executive summary
 

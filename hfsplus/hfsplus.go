@@ -11,9 +11,11 @@
 // implementation from Apple's Technote TN1150 (HFS Plus Volume Format); it does
 // not derive from any GPL-licensed source.
 //
-// To avoid implementing the TN1150 Unicode case-folding table, volumes are
-// written as case-sensitive HFSX (signature "HX", binary key comparison). This
-// is fully mountable by macOS and adequate for read-only distribution images.
+// By default volumes are written as case-insensitive HFS+ (signature "H+"),
+// matching the platform convention for distribution disk images. The current
+// case-insensitive comparator handles ASCII names (which covers app bundles);
+// non-ASCII names require the case-sensitive HFSX mode (signature "HX", binary
+// comparison) until the full TN1150 fold table is implemented.
 package hfsplus
 
 import (
@@ -26,8 +28,10 @@ const (
 	nodeSize  = 4096 // B-tree node size in bytes
 	sectorSz  = 512
 
-	sigHFSX     = 0x4858 // 'HX'
-	versionHFSX = 5
+	sigHFSPlus     = 0x482b // 'H+' (case-insensitive)
+	versionHFSPlus = 4
+	sigHFSX        = 0x4858 // 'HX' (case-sensitive when keyCompareType is binary)
+	versionHFSX    = 5
 
 	cnidRootParent = 1
 	cnidRootFolder = 2
@@ -43,7 +47,8 @@ const (
 	recFolderThread = 3
 	recFileThread   = 4
 
-	keyCompareBinary = 0xBC
+	keyCompareBinary  = 0xBC // HFSX case-sensitive
+	keyCompareFolding = 0xCF // HFS+ case-insensitive (folding)
 
 	btBigKeysMask           = 0x00000002
 	btVariableIndexKeysMask = 0x00000004
@@ -94,11 +99,32 @@ type Entry struct {
 	FinderFlags uint16
 }
 
-// Volume describes a complete HFSX volume to write.
+// Volume describes a complete HFS+ volume to write.
 type Volume struct {
 	Name      string
 	CreatedAt time.Time
 	Children  []*Entry
+
+	// CaseSensitive selects a case-sensitive HFSX volume. The default (false)
+	// writes a case-insensitive HFS+ volume, matching the platform convention
+	// for distribution disk images.
+	//
+	// The case-insensitive comparator currently supports ASCII names only (it
+	// folds A–Z, which matches macOS exactly for ASCII); a name containing a
+	// non-ASCII character returns an error suggesting CaseSensitive. A full
+	// Unicode (TN1150) fold table is a planned follow-up. Case-sensitive volumes
+	// accept any name.
+	CaseSensitive bool
+}
+
+// isASCII reports whether s contains only ASCII (< 0x80) characters.
+func isASCII(s string) bool {
+	for _, r := range s {
+		if r >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 type extent struct{ startBlock, blockCount uint32 }
@@ -124,6 +150,9 @@ func Build(vol *Volume) ([]byte, error) {
 	if vol.Name == "" {
 		return nil, fmt.Errorf("hfsplus: volume name is required")
 	}
+	if !vol.CaseSensitive && !isASCII(vol.Name) {
+		return nil, fmt.Errorf("hfsplus: volume name %q has non-ASCII characters; set CaseSensitive", vol.Name)
+	}
 
 	var records []catRecord
 	var files []*fileSlot
@@ -145,6 +174,9 @@ func Build(vol *Volume) ([]byte, error) {
 		for _, e := range children {
 			if e.Name == "" {
 				return fmt.Errorf("hfsplus: entry under CNID %d has empty name", parent)
+			}
+			if !vol.CaseSensitive && !isASCII(e.Name) {
+				return fmt.Errorf("hfsplus: name %q has non-ASCII characters; set CaseSensitive", e.Name)
 			}
 			cnid := nextCNID
 			nextCNID++
@@ -194,7 +226,7 @@ func Build(vol *Volume) ([]byte, error) {
 
 	// Build the catalog once to learn its node count (record sizes are final;
 	// only file-fork start blocks remain to be patched in).
-	_, catalogNodes := buildCatalogBTree(records)
+	_, catalogNodes := buildCatalogBTree(records, vol.CaseSensitive)
 	catalogBlocks := catalogNodes // nodeSize == blockSize
 
 	var totalFileBlocks uint32
@@ -238,7 +270,7 @@ func Build(vol *Volume) ([]byte, error) {
 		be.PutUint32(records[f.recIndex].full[off:off+4], f.startBlock)
 	}
 
-	catalog, catalogNodes2 := buildCatalogBTree(records)
+	catalog, catalogNodes2 := buildCatalogBTree(records, vol.CaseSensitive)
 	if catalogNodes2 != catalogNodes {
 		return nil, fmt.Errorf("hfsplus: catalog size changed after layout (%d != %d)", catalogNodes2, catalogNodes)
 	}
@@ -271,17 +303,18 @@ func Build(vol *Volume) ([]byte, error) {
 	}
 
 	vh := buildVolumeHeader(volumeHeaderParams{
-		volumeName:  vol.Name,
-		createdAt:   vol.CreatedAt,
-		totalBlocks: totalBlocks,
-		freeBlocks:  freeBlocks,
-		nextAlloc:   dataEnd,
-		nextCatalog: nextCNID,
-		fileCount:   fileCount,
-		folderCount: folderCount,
-		allocFork:   fork{logicalSize: uint64(bitmapBlocks) * blockSize, totalBlocks: uint32(bitmapBlocks), extents: []extent{{allocStart, uint32(bitmapBlocks)}}},
-		extentsFork: fork{logicalSize: extentsBlocks * blockSize, totalBlocks: extentsBlocks, extents: []extent{{extentsStart, extentsBlocks}}},
-		catalogFork: fork{logicalSize: uint64(catalogBlocks) * blockSize, totalBlocks: uint32(catalogBlocks), extents: []extent{{catalogStart, uint32(catalogBlocks)}}},
+		volumeName:    vol.Name,
+		createdAt:     vol.CreatedAt,
+		caseSensitive: vol.CaseSensitive,
+		totalBlocks:   totalBlocks,
+		freeBlocks:    freeBlocks,
+		nextAlloc:     dataEnd,
+		nextCatalog:   nextCNID,
+		fileCount:     fileCount,
+		folderCount:   folderCount,
+		allocFork:     fork{logicalSize: uint64(bitmapBlocks) * blockSize, totalBlocks: uint32(bitmapBlocks), extents: []extent{{allocStart, uint32(bitmapBlocks)}}},
+		extentsFork:   fork{logicalSize: extentsBlocks * blockSize, totalBlocks: extentsBlocks, extents: []extent{{extentsStart, extentsBlocks}}},
+		catalogFork:   fork{logicalSize: uint64(catalogBlocks) * blockSize, totalBlocks: uint32(catalogBlocks), extents: []extent{{catalogStart, uint32(catalogBlocks)}}},
 	})
 	copy(img[1024:], vh)
 	copy(img[len(img)-1024:], vh)

@@ -11,25 +11,30 @@ var be = binary.BigEndian
 // --- Volume header ---
 
 type volumeHeaderParams struct {
-	volumeName  string
-	createdAt   time.Time
-	totalBlocks uint32
-	freeBlocks  uint32
-	nextAlloc   uint32
-	nextCatalog uint32
-	fileCount   uint32
-	folderCount uint32
-	allocFork   fork
-	extentsFork fork
-	catalogFork fork
+	volumeName    string
+	createdAt     time.Time
+	caseSensitive bool
+	totalBlocks   uint32
+	freeBlocks    uint32
+	nextAlloc     uint32
+	nextCatalog   uint32
+	fileCount     uint32
+	folderCount   uint32
+	allocFork     fork
+	extentsFork   fork
+	catalogFork   fork
 }
 
 func buildVolumeHeader(p volumeHeaderParams) []byte {
 	b := make([]byte, 512)
 	t := hfsTime(p.createdAt)
 
-	be.PutUint16(b[0:2], sigHFSX)
-	be.PutUint16(b[2:4], versionHFSX)
+	sig, ver := uint16(sigHFSPlus), uint16(versionHFSPlus)
+	if p.caseSensitive {
+		sig, ver = sigHFSX, versionHFSX
+	}
+	be.PutUint16(b[0:2], sig)
+	be.PutUint16(b[2:4], ver)
 	be.PutUint32(b[4:8], volUnmounted)
 	copy(b[8:12], []byte("10.0")) // lastMountedVersion (informational)
 	be.PutUint32(b[12:16], 0)     // journalInfoBlock
