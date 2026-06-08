@@ -360,3 +360,79 @@ func TestBuild_CodesignSurvives(t *testing.T) {
 		})
 	}
 }
+
+// catalogTreeDepth parses a built image to read the catalog B-tree's treeDepth
+// (in the header node's BTHeaderRec), so a test can assert the deep-tree path ran.
+func catalogTreeDepth(img []byte) uint16 {
+	// catalogFile fork lives at volume-header offset 272; its first extent's
+	// startBlock is at +16. Volume header is at image offset 1024.
+	catStart := be.Uint32(img[1024+272+16 : 1024+272+20])
+	node := catStart * blockSize
+	// BTHeaderRec is record 0 of the header node, at node offset 14; treeDepth
+	// is its first field.
+	return be.Uint16(img[node+14 : node+16])
+}
+
+// TestBuild_DeepBTree forces a depth-3 catalog B-tree (multiple index levels),
+// exercising the recursive index-building path that smaller trees never reach.
+func TestBuild_DeepBTree(t *testing.T) {
+	const n = 3000
+	vol := &Volume{Name: "DEEP", CreatedAt: time.Unix(1700000000, 0)}
+	for i := 0; i < n; i++ {
+		vol.Children = append(vol.Children, &Entry{
+			Name: fmt.Sprintf("file_%05d.txt", i), Kind: KindFile,
+			Data: []byte(fmt.Sprintf("c%d", i)),
+		})
+	}
+	img, err := Build(vol)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if d := catalogTreeDepth(img); d < 3 {
+		t.Fatalf("catalog treeDepth = %d, want >= 3 (deep B-tree path not exercised)", d)
+	} else {
+		t.Logf("catalog treeDepth = %d (multi-index-level path exercised)", d)
+	}
+
+	if runtime.GOOS != "darwin" {
+		return // structural assertion above is meaningful cross-platform
+	}
+	if _, err := exec.LookPath("hdiutil"); err != nil {
+		return
+	}
+
+	out := filepath.Join(t.TempDir(), "deep.dmg")
+	f, _ := os.Create(out)
+	if err := udif.Build(f, img, "whole disk (Apple_HFS : 0)"); err != nil {
+		f.Close()
+		t.Fatalf("udif.Build: %v", err)
+	}
+	f.Close()
+
+	if o, err := exec.Command("hdiutil", "verify", out).CombinedOutput(); err != nil {
+		t.Fatalf("hdiutil verify: %v\n%s", err, o)
+	}
+	o, err := exec.Command("hdiutil", "attach", out, "-nobrowse", "-owners", "off").CombinedOutput()
+	if err != nil {
+		t.Fatalf("attach: %v\n%s", err, o)
+	}
+	var mnt string
+	for _, line := range strings.Split(strings.TrimSpace(string(o)), "\n") {
+		if i := strings.Index(line, "/Volumes/"); i >= 0 {
+			mnt = strings.TrimSpace(line[i:])
+		}
+	}
+	defer exec.Command("hdiutil", "detach", mnt, "-force").Run()
+
+	ents, _ := os.ReadDir(mnt)
+	if len(ents) != n {
+		t.Errorf("entry count = %d, want %d", len(ents), n)
+	}
+	for _, i := range []int{0, 1500, 2999} { // spans the tree
+		name := fmt.Sprintf("file_%05d.txt", i)
+		got, err := os.ReadFile(filepath.Join(mnt, name))
+		if err != nil || string(got) != fmt.Sprintf("c%d", i) {
+			t.Errorf("%s: got %q err=%v", name, got, err)
+		}
+	}
+}

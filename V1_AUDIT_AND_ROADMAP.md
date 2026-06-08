@@ -33,9 +33,14 @@ build tags + `IconPositions`)._
 > **The full pure-Go DMG chain now works:** `hfsplus.Build` → `udif.Build` → a `.dmg` that
 > `hdiutil verify` accepts and Finder mounts — built with zero macOS dependency.
 >
-> **Faithfulness gate passed + case mode resolved.** A real ad-hoc-signed `.app` packaged
-> through the pure-Go chain passes `codesign --verify --strict` when mounted — proving every
-> byte and the exec bit survive (a far stronger check than content round-trips). Volumes now
+> **Faithfulness gate passed + case mode resolved.** A real ad-hoc-signed **single-binary**
+> `.app` packaged through the pure-Go chain passes `codesign --verify --strict` when mounted —
+> proving every byte and the exec bit survive (a far stronger check than content round-trips).
+> _(A framework-bearing bundle under `codesign --verify --deep` — exercising relative
+> framework symlinks — is the first check in the integration phase; the symlink and byte-fidelity
+> primitives it relies on are already independently verified.)_ The deep catalog B-tree
+> (treeDepth ≥ 3, what a real multi-thousand-file `.app` needs) is exercised by a 3000-file
+> mount+readback test. Volumes now
 > default to **case-insensitive HFS+** (`H+`, the platform convention for distribution images);
 > `Volume.CaseSensitive` opts into HFSX. The case-insensitive comparator is ASCII-correct
 > (matches macOS fold exactly for ASCII, which covers app-bundle names) and **errors rather
