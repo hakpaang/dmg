@@ -46,8 +46,8 @@ func buildVolumeHeader(p volumeHeaderParams) []byte {
 	be.PutUint32(b[56:60], 65536) // rsrcClumpSize
 	be.PutUint32(b[60:64], 65536) // dataClumpSize
 	be.PutUint32(b[64:68], p.nextCatalog)
-	be.PutUint32(b[68:72], 0)         // writeCount
-	be.PutUint64(b[72:80], 1)         // encodingsBitmap (encoding 0 = MacRoman)
+	be.PutUint32(b[68:72], 0) // writeCount
+	be.PutUint64(b[72:80], 1) // encodingsBitmap (encoding 0 = MacRoman)
 	// finderInfo[8] at 80..112 = zeros
 	putFork(b[112:192], p.allocFork)
 	putFork(b[192:272], p.extentsFork)
@@ -119,9 +119,9 @@ func buildBTHeaderRec(p btHeaderParams) []byte {
 	be.PutUint16(b[20:22], p.maxKeyLength)
 	be.PutUint32(b[22:26], p.totalNodes)
 	be.PutUint32(b[26:30], p.freeNodes)
-	be.PutUint16(b[30:32], 0)        // reserved1
-	be.PutUint32(b[32:36], 0)        // clumpSize
-	b[36] = 0                        // btreeType = kHFSBTreeType
+	be.PutUint16(b[30:32], 0) // reserved1
+	be.PutUint32(b[32:36], 0) // clumpSize
+	b[36] = 0                 // btreeType = kHFSBTreeType
 	b[37] = p.keyCompareType
 	be.PutUint32(b[38:42], p.attributes)
 	// reserved3[16] = zeros
@@ -166,35 +166,6 @@ func buildEmptyBTree(blocks int, maxKeyLen uint16, compareType uint8) []byte {
 
 // --- Catalog ---
 
-// buildCatalogEmpty builds the catalog B-tree for a volume containing only its
-// root folder: a header node followed by a root leaf node holding the root
-// folder record and its thread record.
-func buildCatalogEmpty(volumeName string, createdAt time.Time) []byte {
-	folderRec := catalogFolderRecord(cnidRootParent, volumeName, cnidRootFolder, 0, createdAt)
-	threadRec := catalogThreadRecord(cnidRootFolder, recFolderThread, cnidRootParent, volumeName)
-
-	leaf := buildNode(kindLeaf, 1, 0, 0, [][]byte{folderRec, threadRec})
-
-	h := btHeaderParams{
-		treeDepth:      1,
-		rootNode:       1,
-		leafRecords:    2,
-		firstLeaf:      1,
-		lastLeaf:       1,
-		totalNodes:     2,
-		freeNodes:      0,
-		maxKeyLength:   maxCatalogKeyLen,
-		keyCompareType: keyCompareBinary,
-		attributes:     btBigKeysMask | btVariableIndexKeysMask,
-	}
-	header := buildHeaderNode(h, 2)
-
-	out := make([]byte, 2*nodeSize)
-	copy(out[0:], header)
-	copy(out[nodeSize:], leaf)
-	return out
-}
-
 // catalogKey builds a catalog B-tree key (parentID + name).
 func catalogKey(parentID uint32, name string) []byte {
 	u := utf16.Encode([]rune(name))
@@ -209,12 +180,15 @@ func catalogKey(parentID uint32, name string) []byte {
 	return b
 }
 
-func catalogFolderRecord(parentID uint32, name string, folderID uint32, valence uint32, createdAt time.Time) []byte {
+// kHFSThreadExistsMask: every file/folder in HFS+ has a thread record.
+const flagThreadExists = 0x0002
+
+func catalogFolderRecord(parentID uint32, name string, folderID uint32, valence uint32, createdAt time.Time, finderFlags uint16) []byte {
 	key := catalogKey(parentID, name)
 	data := make([]byte, 88)
 	t := hfsTime(createdAt)
 	be.PutUint16(data[0:2], recFolder)
-	be.PutUint16(data[2:4], 0) // flags
+	be.PutUint16(data[2:4], flagThreadExists)
 	be.PutUint32(data[4:8], valence)
 	be.PutUint32(data[8:12], folderID)
 	be.PutUint32(data[12:16], t) // createDate
@@ -223,8 +197,56 @@ func catalogFolderRecord(parentID uint32, name string, folderID uint32, valence 
 	be.PutUint32(data[24:28], t) // accessDate
 	be.PutUint32(data[28:32], 0) // backupDate
 	putBSDInfo(data[32:48], 0040755)
-	// userInfo, finderInfo (32 bytes) zero; textEncoding, reserved zero
+	// userInfo (FolderInfo) at 48..64: finderFlags is at offset 8 of FolderInfo.
+	be.PutUint16(data[48+8:48+10], finderFlags)
+	// finderInfo (ExtendedFolderInfo) 64..80 zero; textEncoding, reserved zero
 	return append(key, data...)
+}
+
+// fileForkInfo describes a file's data fork for the catalog file record.
+type fileForkInfo struct {
+	logicalSize uint64
+	startBlock  uint32
+	blockCount  uint32
+}
+
+// catalogFileRecord builds an HFSPlusCatalogFile record (248-byte body).
+// fileType/fileCreator populate the FileInfo (used to mark symlinks); mode is
+// the POSIX file mode (e.g. 0100644 for a file, 0120755 for a symlink).
+func catalogFileRecord(parentID uint32, name string, fileID uint32, createdAt time.Time,
+	mode uint16, fileType, fileCreator uint32, finderFlags uint16, dataFork fileForkInfo) []byte {
+	key := catalogKey(parentID, name)
+	data := make([]byte, 248)
+	t := hfsTime(createdAt)
+	be.PutUint16(data[0:2], recFile)
+	be.PutUint16(data[2:4], flagThreadExists)
+	be.PutUint32(data[4:8], 0) // reserved1
+	be.PutUint32(data[8:12], fileID)
+	be.PutUint32(data[12:16], t) // createDate
+	be.PutUint32(data[16:20], t) // contentModDate
+	be.PutUint32(data[20:24], t) // attributeModDate
+	be.PutUint32(data[24:28], t) // accessDate
+	be.PutUint32(data[28:32], 0) // backupDate
+	putBSDInfo(data[32:48], mode)
+	// userInfo (FileInfo) 48..64: fileType(4), fileCreator(4), finderFlags(2), ...
+	be.PutUint32(data[48:52], fileType)
+	be.PutUint32(data[52:56], fileCreator)
+	be.PutUint16(data[56:58], finderFlags)
+	// finderInfo (ExtendedFileInfo) 64..80 zero; textEncoding 80, reserved2 84
+	// dataFork HFSPlusForkData at 88..168
+	putForkData(data[88:168], dataFork)
+	// resourceFork at 168..248 left zero
+	return append(key, data...)
+}
+
+func putForkData(b []byte, f fileForkInfo) {
+	be.PutUint64(b[0:8], f.logicalSize)
+	be.PutUint32(b[8:12], uint32(f.logicalSize)) // clumpSize
+	be.PutUint32(b[12:16], f.blockCount)
+	if f.blockCount > 0 {
+		be.PutUint32(b[16:20], f.startBlock)
+		be.PutUint32(b[20:24], f.blockCount)
+	}
 }
 
 func catalogThreadRecord(ownID uint32, recordType uint16, parentID uint32, name string) []byte {

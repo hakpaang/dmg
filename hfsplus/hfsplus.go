@@ -26,140 +26,270 @@ const (
 	nodeSize  = 4096 // B-tree node size in bytes
 	sectorSz  = 512
 
-	sigHFSX    = 0x4858 // 'HX'
+	sigHFSX     = 0x4858 // 'HX'
 	versionHFSX = 5
 
-	// Reserved catalog node IDs (CNIDs).
-	cnidRootParent = 1 // parent of the root folder
-	cnidRootFolder = 2 // the root folder itself
+	cnidRootParent = 1
+	cnidRootFolder = 2
 	cnidFirstUser  = 16
 
-	// B-tree node kinds (stored as a signed byte).
 	kindLeaf   = -1
 	kindIndex  = 0
 	kindHeader = 1
 	kindMap    = 2
 
-	// Catalog record types.
 	recFolder       = 1
 	recFile         = 2
 	recFolderThread = 3
 	recFileThread   = 4
 
-	keyCompareBinary = 0xBC // HFSX case-sensitive (binary) comparison
+	keyCompareBinary = 0xBC
 
-	// B-tree header attributes.
-	btBigKeysMask          = 0x00000002
+	btBigKeysMask           = 0x00000002
 	btVariableIndexKeysMask = 0x00000004
 
 	maxCatalogKeyLen = 516
+	maxExtentKeyLen  = 10
 
-	// Volume attribute bits.
 	volUnmounted = 0x00000100
+
+	// POSIX mode helpers.
+	modeDir     = 0040755
+	modeFile    = 0100644
+	modeSymlink = 0120755
+
+	// Symlink FileInfo type/creator (so Finder recognises it).
+	symlinkType    = 0x736c6e6b // 'slnk'
+	symlinkCreator = 0x72686170 // 'rhap'
+
+	minVolumeBytes = 1 << 20 // floor so tiny volumes still mount cleanly
 )
 
-// hfsEpochDelta is the seconds between the HFS epoch (1904-01-01) and the Unix
-// epoch (1970-01-01).
 const hfsEpochDelta = 2082844800
 
-func hfsTime(t time.Time) uint32 {
-	return uint32(t.Unix() + hfsEpochDelta)
+func hfsTime(t time.Time) uint32 { return uint32(t.Unix() + hfsEpochDelta) }
+
+// Kind distinguishes the three entry types a volume can hold.
+type Kind int
+
+const (
+	KindDir Kind = iota
+	KindFile
+	KindSymlink
+)
+
+// Entry is one node in the directory tree.
+type Entry struct {
+	Name string
+	Kind Kind
+
+	Children []*Entry // KindDir
+	Data     []byte   // KindFile
+	Target   string   // KindSymlink
+
+	// Mode is the POSIX permission bits (without the type bits). 0 selects a
+	// sensible default (0755 for dirs/symlinks, 0644 for files).
+	Mode uint16
+	// FinderFlags sets the Finder flag bits (e.g. kHasCustomIcon = 0x0400).
+	FinderFlags uint16
 }
 
-// extent is a contiguous run of allocation blocks.
-type extent struct {
-	startBlock uint32
-	blockCount uint32
+// Volume describes a complete HFSX volume to write.
+type Volume struct {
+	Name      string
+	CreatedAt time.Time
+	Children  []*Entry
 }
 
-// fork describes one file fork (its size and on-disk extents). For this
-// build-once writer every fork fits in a single extent.
+type extent struct{ startBlock, blockCount uint32 }
+
 type fork struct {
 	logicalSize uint64
 	totalBlocks uint32
 	extents     []extent
 }
 
-// BuildEmpty writes a minimal, empty HFSX volume of the given size (in bytes,
-// which must be a positive multiple of the 4096-byte block size) and returns
-// the raw image. The volume contains only its root folder.
-//
-// This is the foundational case; file/folder support builds on the same layout.
-func BuildEmpty(volumeName string, sizeBytes int, createdAt time.Time) ([]byte, error) {
-	if sizeBytes <= 0 || sizeBytes%blockSize != 0 {
-		return nil, fmt.Errorf("hfsplus: size %d must be a positive multiple of %d", sizeBytes, blockSize)
-	}
-	totalBlocks := uint32(sizeBytes / blockSize)
-	if totalBlocks < 8 {
-		return nil, fmt.Errorf("hfsplus: volume too small (%d blocks)", totalBlocks)
+// fileSlot tracks a file/symlink that needs data-fork blocks allocated.
+type fileSlot struct {
+	recIndex   int
+	keyLen     int
+	data       []byte
+	blockCount uint32
+	startBlock uint32
+}
+
+// Build writes a complete HFSX volume image for the given tree and returns the
+// raw bytes, ready to be wrapped by udif.Build.
+func Build(vol *Volume) ([]byte, error) {
+	if vol.Name == "" {
+		return nil, fmt.Errorf("hfsplus: volume name is required")
 	}
 
-	img := make([]byte, sizeBytes)
+	var records []catRecord
+	var files []*fileSlot
+	nextCNID := uint32(cnidFirstUser)
+	var fileCount, folderCount uint32
 
-	// --- Block layout (contiguous, simple) ---
-	//   block 0           : reserved (boot blocks + volume header at offset 1024)
-	//   block 1           : allocation bitmap
-	//   blocks 2..3       : catalog B-tree (header node + root leaf node)
-	//   block 4           : extents overflow B-tree (header node only, empty)
-	//   last block        : holds the alternate volume header (offset size-1024)
-	const allocStart = 1
-	const catalogStart = 2
-	const catalogBlocks = 2
-	const extentsStart = 4
+	add := func(r []byte, key []byte) int {
+		records = append(records, catRecord{key: key, full: r})
+		return len(records) - 1
+	}
+
+	// Root folder record + thread.
+	rootKey := catalogKey(cnidRootParent, vol.Name)
+	add(catalogFolderRecord(cnidRootParent, vol.Name, cnidRootFolder, uint32(len(vol.Children)), vol.CreatedAt, 0), rootKey)
+	add(catalogThreadRecord(cnidRootFolder, recFolderThread, cnidRootParent, vol.Name), catalogKey(cnidRootFolder, ""))
+
+	var walk func(parent uint32, children []*Entry) error
+	walk = func(parent uint32, children []*Entry) error {
+		for _, e := range children {
+			if e.Name == "" {
+				return fmt.Errorf("hfsplus: entry under CNID %d has empty name", parent)
+			}
+			cnid := nextCNID
+			nextCNID++
+			switch e.Kind {
+			case KindDir:
+				folderCount++
+				key := catalogKey(parent, e.Name)
+				add(catalogFolderRecord(parent, e.Name, cnid, uint32(len(e.Children)), vol.CreatedAt, e.FinderFlags), key)
+				add(catalogThreadRecord(cnid, recFolderThread, parent, e.Name), catalogKey(cnid, ""))
+				if err := walk(cnid, e.Children); err != nil {
+					return err
+				}
+			case KindFile, KindSymlink:
+				fileCount++
+				data := e.Data
+				mode := e.Mode
+				var ftype, fcreator uint32
+				if e.Kind == KindSymlink {
+					data = []byte(e.Target)
+					if mode == 0 {
+						mode = modeSymlink & 0777
+					}
+					mode |= 0120000
+					ftype, fcreator = symlinkType, symlinkCreator
+				} else {
+					if mode == 0 {
+						mode = modeFile & 0777
+					}
+					mode |= 0100000
+				}
+				blockCount := uint32((len(data) + blockSize - 1) / blockSize)
+				key := catalogKey(parent, e.Name)
+				rec := catalogFileRecord(parent, e.Name, cnid, vol.CreatedAt, mode, ftype, fcreator, e.FinderFlags,
+					fileForkInfo{logicalSize: uint64(len(data)), startBlock: 0, blockCount: blockCount})
+				idx := add(rec, key)
+				files = append(files, &fileSlot{recIndex: idx, keyLen: len(key), data: data, blockCount: blockCount})
+				add(catalogThreadRecord(cnid, recFileThread, parent, e.Name), catalogKey(cnid, ""))
+			default:
+				return fmt.Errorf("hfsplus: %q has unknown kind %d", e.Name, e.Kind)
+			}
+		}
+		return nil
+	}
+	if err := walk(cnidRootFolder, vol.Children); err != nil {
+		return nil, err
+	}
+
+	// Build the catalog once to learn its node count (record sizes are final;
+	// only file-fork start blocks remain to be patched in).
+	_, catalogNodes := buildCatalogBTree(records)
+	catalogBlocks := catalogNodes // nodeSize == blockSize
+
+	var totalFileBlocks uint32
+	for _, f := range files {
+		totalFileBlocks += f.blockCount
+	}
+
+	// Resolve the block layout, iterating until the bitmap size stabilises.
 	const extentsBlocks = 1
-	lastBlock := totalBlocks - 1
+	bitmapBlocks := 1
+	var allocStart, catalogStart, extentsStart, dataStart, dataEnd, totalBlocks uint32
+	for {
+		allocStart = 1
+		catalogStart = allocStart + uint32(bitmapBlocks)
+		extentsStart = catalogStart + uint32(catalogBlocks)
+		dataStart = extentsStart + extentsBlocks
+		dataEnd = dataStart + totalFileBlocks
+		totalBlocks = dataEnd + 1 // last block holds the alternate volume header
+		if min := uint32(minVolumeBytes / blockSize); totalBlocks < min {
+			totalBlocks = min
+		}
+		need := int((totalBlocks/8 + uint32(blockSize) - 1) / uint32(blockSize))
+		bitmapBytes := (int(totalBlocks) + 7) / 8
+		need = (bitmapBytes + blockSize - 1) / blockSize
+		if need == bitmapBlocks {
+			break
+		}
+		bitmapBlocks = need
+	}
 
-	catalogFork := fork{
-		logicalSize: uint64(catalogBlocks) * blockSize,
-		totalBlocks: catalogBlocks,
-		extents:     []extent{{catalogStart, catalogBlocks}},
-	}
-	extentsFork := fork{
-		logicalSize: uint64(extentsBlocks) * blockSize,
-		totalBlocks: extentsBlocks,
-		extents:     []extent{{extentsStart, extentsBlocks}},
-	}
-	allocFork := fork{
-		logicalSize: blockSize,
-		totalBlocks: 1,
-		extents:     []extent{{allocStart, 1}},
+	// Assign data blocks and patch file records.
+	nextData := dataStart
+	for _, f := range files {
+		if f.blockCount == 0 {
+			continue
+		}
+		f.startBlock = nextData
+		nextData += f.blockCount
+		// dataFork.extents[0].startBlock lives at full[keyLen + 88 + 16].
+		off := f.keyLen + 88 + 16
+		be.PutUint32(records[f.recIndex].full[off:off+4], f.startBlock)
 	}
 
-	// --- Allocation bitmap ---
-	usedBlocks := []uint32{0, allocStart, catalogStart, catalogStart + 1, extentsStart, lastBlock}
-	bitmap := make([]byte, blockSize)
-	for _, b := range usedBlocks {
-		bitmap[b/8] |= 0x80 >> (b % 8)
+	catalog, catalogNodes2 := buildCatalogBTree(records)
+	if catalogNodes2 != catalogNodes {
+		return nil, fmt.Errorf("hfsplus: catalog size changed after layout (%d != %d)", catalogNodes2, catalogNodes)
 	}
+
+	// Assemble the image.
+	img := make([]byte, int(totalBlocks)*blockSize)
+
+	// Allocation bitmap: mark the metadata region, all file blocks, and the
+	// alternate-header block as used.
+	bitmap := make([]byte, bitmapBlocks*blockSize)
+	markUsed := func(b uint32) { bitmap[b/8] |= 0x80 >> (b % 8) }
+	for b := uint32(0); b < dataEnd; b++ {
+		markUsed(b)
+	}
+	markUsed(totalBlocks - 1)
 	copy(img[allocStart*blockSize:], bitmap)
-	freeBlocks := totalBlocks - uint32(len(usedBlocks))
+	usedCount := dataEnd + 1
+	freeBlocks := totalBlocks - usedCount
 
-	// --- Catalog B-tree ---
-	catalog := buildCatalogEmpty(volumeName, createdAt)
 	copy(img[catalogStart*blockSize:], catalog)
 
-	// --- Extents overflow B-tree (empty) ---
-	extents := buildEmptyBTree(extentsBlocks, maxExtentKeyLen, keyCompareBinary)
+	extents := buildEmptyBTree(extentsBlocks, maxExtentKeyLen, 0)
 	copy(img[extentsStart*blockSize:], extents)
 
-	// --- Volume header (offset 1024) and alternate (offset size-1024) ---
+	for _, f := range files {
+		if f.blockCount == 0 {
+			continue
+		}
+		copy(img[f.startBlock*blockSize:], f.data)
+	}
+
 	vh := buildVolumeHeader(volumeHeaderParams{
-		volumeName:  volumeName,
-		createdAt:   createdAt,
+		volumeName:  vol.Name,
+		createdAt:   vol.CreatedAt,
 		totalBlocks: totalBlocks,
 		freeBlocks:  freeBlocks,
-		nextAlloc:   extentsStart + extentsBlocks,
-		nextCatalog: cnidFirstUser,
-		fileCount:   0,
-		folderCount: 0,
-		allocFork:   allocFork,
-		extentsFork: extentsFork,
-		catalogFork: catalogFork,
+		nextAlloc:   dataEnd,
+		nextCatalog: nextCNID,
+		fileCount:   fileCount,
+		folderCount: folderCount,
+		allocFork:   fork{logicalSize: uint64(bitmapBlocks) * blockSize, totalBlocks: uint32(bitmapBlocks), extents: []extent{{allocStart, uint32(bitmapBlocks)}}},
+		extentsFork: fork{logicalSize: extentsBlocks * blockSize, totalBlocks: extentsBlocks, extents: []extent{{extentsStart, extentsBlocks}}},
+		catalogFork: fork{logicalSize: uint64(catalogBlocks) * blockSize, totalBlocks: uint32(catalogBlocks), extents: []extent{{catalogStart, uint32(catalogBlocks)}}},
 	})
 	copy(img[1024:], vh)
-	copy(img[sizeBytes-1024:], vh) // alternate volume header
+	copy(img[len(img)-1024:], vh)
 
 	return img, nil
 }
 
-const maxExtentKeyLen = 10 // kHFSPlusExtentKeyMaximumLength
+// BuildEmpty writes a minimal empty HFSX volume containing only its root folder.
+func BuildEmpty(volumeName string, createdAt time.Time) ([]byte, error) {
+	return Build(&Volume{Name: volumeName, CreatedAt: createdAt})
+}

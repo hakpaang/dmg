@@ -17,15 +17,25 @@ build tags + `IconPositions`)._
 > nailed during the POC: ImageVariant must be `2` (whole-disk device), and the BLKX checksum
 > covers only the **stored** (non-zero-fill) chunk data, not the full image.
 >
-> **In progress — `hfsplus/` writer:** an empty pure-Go HFSX volume now mounts. `BuildEmpty`
-> emits a case-sensitive HFSX volume (volume header + alternate, allocation bitmap, catalog
-> B-tree with root folder + thread, empty extents B-tree) with no host calls. Verified by an
-> oracle test: wrapped with `udif`, `hdiutil verify` passes and macOS mounts it as
-> "Case-sensitive HFS+" with the right volume name. Cross-compiles to linux/windows. This
-> proves the **entire pure-Go chain** (hfsplus → udif → mountable .dmg) end-to-end.
+> **Done — `hfsplus/` writer is functional.** `hfsplus.Build(*Volume)` writes a complete
+> case-sensitive HFSX volume from an arbitrary directory tree with **no host OS calls**:
+> volume header + alternate, allocation bitmap (multi-block aware), a **bulk-loaded multi-node
+> catalog B-tree** (leaf + index levels), an empty extents B-tree, and data-fork block
+> allocation. It supports **files** (incl. empty and multi-block), **folders** (nested), and
+> **symlinks** (the `/Applications` drop target), plus per-entry POSIX mode and Finder flags
+> (e.g. `kHasCustomIcon`). Arbitrary files such as `.DS_Store` and `.VolumeIcon.icns` are just
+> `KindFile` entries.
 >
-> **Next:** add files/folders to the catalog (file records + data-fork block allocation), then
-> symlinks, then encode icon/FinderInfo + `.DS_Store` into the catalog. See §5 below.
+> Oracle-verified by tests that mount the output and read it back: a mixed file/folder/symlink
+> tree (contents + symlink target confirmed) and a 600-file volume (forces multiple leaf nodes
+> + an index node; all files read back). Cross-compiles to linux/windows/arm64.
+>
+> **The full pure-Go DMG chain now works:** `hfsplus.Build` → `udif.Build` → a `.dmg` that
+> `hdiutil verify` accepts and Finder mounts — built with zero macOS dependency.
+>
+> **Remaining for the Wails backend (not the writer itself):** wire this behind
+> `dmg.Build()` as `nativeBackend` (walk a source dir → `Volume`, generate `.DS_Store`/icons),
+> and verify a real signed `.app` launches from a case-sensitive volume. See §5 below.
 
 ## 1. Executive summary
 
