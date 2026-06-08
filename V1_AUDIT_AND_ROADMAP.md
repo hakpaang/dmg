@@ -17,9 +17,15 @@ build tags + `IconPositions`)._
 > nailed during the POC: ImageVariant must be `2` (whole-disk device), and the BLKX checksum
 > covers only the **stored** (non-zero-fill) chunk data, not the full image.
 >
-> **Next long pole:** the `hfsplus/` writer (build-once, no-journal, bulk-loaded B-trees;
-> case-sensitive HFSX considered to avoid the Unicode fold table). That produces the raw image
-> `udif` wraps. See §5 "Pure-Go backend" below.
+> **In progress — `hfsplus/` writer:** an empty pure-Go HFSX volume now mounts. `BuildEmpty`
+> emits a case-sensitive HFSX volume (volume header + alternate, allocation bitmap, catalog
+> B-tree with root folder + thread, empty extents B-tree) with no host calls. Verified by an
+> oracle test: wrapped with `udif`, `hdiutil verify` passes and macOS mounts it as
+> "Case-sensitive HFS+" with the right volume name. Cross-compiles to linux/windows. This
+> proves the **entire pure-Go chain** (hfsplus → udif → mountable .dmg) end-to-end.
+>
+> **Next:** add files/folders to the catalog (file records + data-fork block allocation), then
+> symlinks, then encode icon/FinderInfo + `.DS_Store` into the catalog. See §5 below.
 
 ## 1. Executive summary
 
