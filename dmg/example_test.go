@@ -23,6 +23,23 @@ func ExampleBuild() {
 	}
 }
 
+// Force the pure-Go backend to build a DMG with no macOS tools — this is what
+// lets you produce a macOS .dmg from a Linux or Windows CI runner. The native
+// backend produces a UDZO, HFS+ image.
+func ExampleBuild_native() {
+	opts := dmg.Options{
+		VolumeName:             "MyApp",
+		OutputPath:             "MyApp.dmg",
+		Files:                  map[string]string{"MyApp.app": "/path/to/MyApp.app"},
+		AddApplicationsSymlink: true,
+		Background:             &dmg.BackgroundConfig{File: "/path/to/background.png"},
+		Backend:                dmg.BackendNative,
+	}
+	if err := dmg.Build(opts); err != nil {
+		panic(err)
+	}
+}
+
 // DefaultOptions gives a sensible starting point for a typical app DMG; tweak
 // the returned Options and add your app to Files.
 func ExampleDefaultOptions() {

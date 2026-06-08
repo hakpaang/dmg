@@ -97,6 +97,10 @@ type Entry struct {
 	Mode uint16
 	// FinderFlags sets the Finder flag bits (e.g. kHasCustomIcon = 0x0400).
 	FinderFlags uint16
+
+	// CNID is set by Build (and AssignCNIDs) to the catalog node ID this entry
+	// received. It is output only; any value set before Build is overwritten.
+	CNID uint32
 }
 
 // Volume describes a complete HFS+ volume to write.
@@ -104,6 +108,10 @@ type Volume struct {
 	Name      string
 	CreatedAt time.Time
 	Children  []*Entry
+
+	// RootFinderFlags sets the Finder flag bits on the root folder (e.g.
+	// kHasCustomIcon = 0x0400 when the volume has a .VolumeIcon.icns).
+	RootFinderFlags uint16
 
 	// CaseSensitive selects a case-sensitive HFSX volume. The default (false)
 	// writes a case-insensitive HFS+ volume, matching the platform convention
@@ -115,6 +123,26 @@ type Volume struct {
 	// Unicode (TN1150) fold table is a planned follow-up. Case-sensitive volumes
 	// accept any name.
 	CaseSensitive bool
+}
+
+// AssignCNIDs walks the volume in the same order Build uses and records each
+// entry's catalog node ID in Entry.CNID, without building the image. This lets
+// callers reference files by CNID (e.g. when constructing a .DS_Store alias)
+// before the volume is built. Appending entries after calling AssignCNIDs does
+// not change the CNIDs already assigned to earlier entries.
+func AssignCNIDs(vol *Volume) {
+	next := uint32(cnidFirstUser)
+	var walk func(children []*Entry)
+	walk = func(children []*Entry) {
+		for _, e := range children {
+			e.CNID = next
+			next++
+			if e.Kind == KindDir {
+				walk(e.Children)
+			}
+		}
+	}
+	walk(vol.Children)
 }
 
 // isASCII reports whether s contains only ASCII (< 0x80) characters.
@@ -166,7 +194,7 @@ func Build(vol *Volume) ([]byte, error) {
 
 	// Root folder record + thread.
 	rootKey := catalogKey(cnidRootParent, vol.Name)
-	add(catalogFolderRecord(cnidRootParent, vol.Name, cnidRootFolder, uint32(len(vol.Children)), vol.CreatedAt, 0), rootKey)
+	add(catalogFolderRecord(cnidRootParent, vol.Name, cnidRootFolder, uint32(len(vol.Children)), vol.CreatedAt, vol.RootFinderFlags), rootKey)
 	add(catalogThreadRecord(cnidRootFolder, recFolderThread, cnidRootParent, vol.Name), catalogKey(cnidRootFolder, ""))
 
 	var walk func(parent uint32, children []*Entry) error
@@ -180,6 +208,7 @@ func Build(vol *Volume) ([]byte, error) {
 			}
 			cnid := nextCNID
 			nextCNID++
+			e.CNID = cnid
 			switch e.Kind {
 			case KindDir:
 				folderCount++

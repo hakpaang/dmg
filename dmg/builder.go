@@ -5,119 +5,44 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
-	"syscall"
 
 	"github.com/leaanthony/dmg/dsstore"
 )
 
 // Build creates a styled DMG disk image according to the provided options.
 //
-// The pipeline:
-//  1. Create a writable DMG (UDRW format)
-//  2. Attach/mount it
-//  3. Copy files into the volume
-//  4. Create /Applications symlink (if requested)
-//  5. Copy background image to .background/ (if configured)
-//  6. Generate .DS_Store with icon positions, background, window settings
-//  7. Sync and detach
-//  8. Shrink to minimum size
-//  9. Convert to final compressed format
-//  10. Clean up temporary files
+// The backend is chosen by opts.Backend (default BackendAuto): macOS hdiutil
+// when available, otherwise the pure-Go hfsplus+udif backend, which needs no
+// macOS tools and works when cross-compiled to any platform.
 func Build(opts Options) error {
 	if err := validateOptions(&opts); err != nil {
 		return fmt.Errorf("invalid options: %w", err)
 	}
-
-	// Create temp DMG path
-	tempDMG := opts.OutputPath + ".writable.dmg"
-	os.Remove(tempDMG) // Remove stale temp from previous run
-	defer os.Remove(tempDMG)
-
-	// Step 1: Create writable DMG
-	sizeMB := opts.SizeHint
-	if sizeMB == 0 {
-		sizeMB = calculateSize(opts)
+	switch resolveBackend(opts) {
+	case BackendNative:
+		return buildNative(opts)
+	default:
+		return buildHdiutil(opts)
 	}
-	if err := hdiutilCreate(opts.VolumeName, opts.Filesystem, sizeMB, tempDMG); err != nil {
-		return fmt.Errorf("create DMG: %w", err)
-	}
+}
 
-	// Step 2: Attach
-	mountPoint, err := hdiutilAttach(tempDMG)
-	if err != nil {
-		return fmt.Errorf("attach DMG: %w", err)
-	}
-	// Ensure we detach even on error
-	defer hdiutilDetach(mountPoint)
-
-	// Step 3: Copy files
-	if err := copyFiles(opts, mountPoint); err != nil {
-		return fmt.Errorf("copy files: %w", err)
-	}
-
-	// Step 4: Applications symlink
-	if opts.AddApplicationsSymlink {
-		linkPath := filepath.Join(mountPoint, "Applications")
-		if err := os.Symlink("/Applications", linkPath); err != nil {
-			return fmt.Errorf("create Applications symlink: %w", err)
+// resolveBackend picks the concrete backend for the given options.
+func resolveBackend(opts Options) Backend {
+	switch opts.Backend {
+	case BackendNative:
+		return BackendNative
+	case BackendHdiutil:
+		return BackendHdiutil
+	default: // BackendAuto
+		if runtime.GOOS == "darwin" {
+			if _, err := exec.LookPath("hdiutil"); err == nil {
+				return BackendHdiutil
+			}
 		}
+		return BackendNative
 	}
-
-	// Step 5: Background image
-	var bgRelativePath string
-	if opts.Background != nil && opts.Background.File != "" {
-		bgRelativePath, err = copyBackground(opts.Background.File, mountPoint)
-		if err != nil {
-			return fmt.Errorf("copy background: %w", err)
-		}
-	}
-
-	// Step 6: Volume icon
-	if opts.VolumeIcon != "" {
-		if err := copyVolumeIcon(opts.VolumeIcon, mountPoint); err != nil {
-			return fmt.Errorf("copy volume icon: %w", err)
-		}
-	}
-
-	// Step 7: Generate .DS_Store
-	if err := generateDSStore(opts, mountPoint, bgRelativePath); err != nil {
-		return fmt.Errorf("generate .DS_Store: %w", err)
-	}
-
-	// Step 8: Sync filesystem
-	syscall.Sync()
-
-	// Step 9: Detach
-	if err := hdiutilDetach(mountPoint); err != nil {
-		return fmt.Errorf("detach DMG: %w", err)
-	}
-
-	// Step 10: Shrink writable DMG
-	if err := hdiutilResize(tempDMG); err != nil {
-		// Non-fatal: resize failure just means slightly larger output
-		fmt.Fprintf(os.Stderr, "warning: resize failed: %v\n", err)
-	}
-
-	// Step 11: Convert to final format
-	// Remove output if it exists (hdiutil won't overwrite)
-	os.Remove(opts.OutputPath)
-	if err := hdiutilConvert(tempDMG, opts.OutputPath, opts.Format); err != nil {
-		return fmt.Errorf("convert DMG: %w", err)
-	}
-
-	// Step 12: Set file icon on the final DMG (if configured)
-	if opts.FileIcon != "" {
-		icnsData, err := readIconData(opts.FileIcon)
-		if err != nil {
-			return fmt.Errorf("read file icon: %w", err)
-		}
-		if err := setFileIcon(opts.OutputPath, icnsData); err != nil {
-			return fmt.Errorf("set file icon: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // BuildWithContents creates a DMG using a simpler content-item based API.
@@ -163,6 +88,7 @@ func BuildWithContents(volumeName, outputPath string, contents []ContentItem, op
 		if opts.SizeHint > 0 {
 			o.SizeHint = opts.SizeHint
 		}
+		o.Backend = opts.Backend
 	}
 
 	for _, item := range contents {
@@ -171,7 +97,7 @@ func BuildWithContents(volumeName, outputPath string, contents []ContentItem, op
 			name = filepath.Base(item.Path)
 		}
 		if item.Link != "" {
-			// Links are handled separately
+			// Links other than the Applications drop-link are not modelled here.
 			continue
 		}
 		o.Files[name] = item.Path
@@ -238,83 +164,37 @@ func dirSize(path string) int64 {
 	return size
 }
 
-// copyFiles copies all configured files into the mounted volume.
-func copyFiles(opts Options, mountPoint string) error {
-	for name, src := range opts.Files {
-		dst := filepath.Join(mountPoint, name)
-		if err := dittoCopy(src, dst); err != nil {
-			return fmt.Errorf("copy %s: %w", name, err)
-		}
+// sortedFileNames returns file names from opts.Files in sorted order.
+func sortedFileNames(opts Options) []string {
+	names := make([]string, 0, len(opts.Files))
+	for name := range opts.Files {
+		names = append(names, name)
 	}
-	return nil
+	sort.Strings(names)
+	return names
 }
 
-// dittoCopy uses /usr/bin/ditto to copy files, preserving code signatures and metadata.
-func dittoCopy(src, dst string) error {
-	cmd := exec.Command("/usr/bin/ditto", src, dst)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ditto: %w\n%s", err, out)
-	}
-	return nil
-}
-
-// copyBackground copies the background image to the volume root as a hidden file
-// (e.g., ".background.png") and returns the relative path.
-// This matches dmgbuild behavior where the file is at root, not in a subdirectory.
-func copyBackground(bgPath, mountPoint string) (string, error) {
-	ext := filepath.Ext(bgPath)
-	bgName := ".background" + ext
-	dst := filepath.Join(mountPoint, bgName)
-	if err := dittoCopy(bgPath, dst); err != nil {
-		return "", err
-	}
-
-	return bgName, nil
-}
-
-// copyVolumeIcon copies the icon as .VolumeIcon.icns and sets the custom icon flag.
-// Accepts .icns files directly, or .png/.jpg which are auto-converted to ICNS.
-func copyVolumeIcon(iconPath, mountPoint string) error {
-	icnsData, err := readIconData(iconPath)
-	if err != nil {
-		return fmt.Errorf("read volume icon: %w", err)
-	}
-
-	dst := filepath.Join(mountPoint, ".VolumeIcon.icns")
-	if err := os.WriteFile(dst, icnsData, 0644); err != nil {
-		return fmt.Errorf("write .VolumeIcon.icns: %w", err)
-	}
-
-	return setCustomIconFlag(mountPoint)
-}
-
-// generateDSStore creates the .DS_Store file on the mounted volume.
-func generateDSStore(opts Options, mountPoint, bgRelativePath string) error {
+// newStyledStore builds the .DS_Store contents (window geometry, icon view
+// options, background, and icon positions) shared by both backends. aliasInfo
+// is used only when bgRelativePath is set.
+func newStyledStore(opts Options, bgRelativePath string, aliasInfo *dsstore.AliasFileInfo) *dsstore.Store {
 	s := dsstore.New()
 
-	// Window settings (bwsp record - modern format)
-	top := opts.Window.Y
-	left := opts.Window.X
-	bottom := opts.Window.Y + opts.Window.Height
-	right := opts.Window.X + opts.Window.Width
 	s.SetWindowSettings(dsstore.WindowSettings{
-		Top:    top,
-		Left:   left,
-		Bottom: bottom,
-		Right:  right,
+		Top:    opts.Window.Y,
+		Left:   opts.Window.X,
+		Bottom: opts.Window.Y + opts.Window.Height,
+		Right:  opts.Window.X + opts.Window.Width,
 	})
 
-	// Icon view options (icvp record - modern format)
 	iconViewOpts := &dsstore.IconViewOptions{
-		IconSize:  float64(opts.Icon.Size),
-		TextSize:  opts.Icon.TextSize,
-		GridSpace: opts.Icon.GridSpace,
+		IconSize:      float64(opts.Icon.Size),
+		TextSize:      opts.Icon.TextSize,
+		GridSpace:     opts.Icon.GridSpace,
 		LabelOnBottom: true,
 	}
 
 	if bgRelativePath != "" {
-		aliasInfo := getAliasFileInfo(mountPoint, bgRelativePath)
 		s.SetBackgroundImage(opts.VolumeName, bgRelativePath, iconViewOpts, aliasInfo)
 	} else if opts.Background != nil && opts.Background.Color != nil {
 		iconViewOpts.BackgroundType = dsstore.BackgroundColor
@@ -326,26 +206,13 @@ func generateDSStore(opts Options, mountPoint, bgRelativePath string) error {
 		s.SetIconViewOptions(*iconViewOpts)
 	}
 
-	// Auto-position icons for all files
 	items := sortedFileNames(opts)
 	if opts.AddApplicationsSymlink {
 		items = append(items, "Applications")
 	}
 	positionIcons(s, items, opts.Window.Width, opts.Window.Height)
 
-	// Write .DS_Store
-	dsStorePath := filepath.Join(mountPoint, ".DS_Store")
-	return s.WriteFile(dsStorePath)
-}
-
-// sortedFileNames returns file names from opts.Files in sorted order.
-func sortedFileNames(opts Options) []string {
-	names := make([]string, 0, len(opts.Files))
-	for name := range opts.Files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return s
 }
 
 // positionIcons sets icon positions for items, distributing them evenly
@@ -367,33 +234,4 @@ func positionIcons(s *dsstore.Store, items []string, windowWidth, windowHeight i
 func unixToHFS(unixTime int64) uint32 {
 	const hfsEpochDelta = 2082844800
 	return uint32(unixTime + hfsEpochDelta)
-}
-
-// getAliasFileInfo gathers real filesystem metadata from the mounted volume
-// for building an accurate alias record that Finder can resolve.
-func getAliasFileInfo(mountPoint, relativePath string) *dsstore.AliasFileInfo {
-	info := &dsstore.AliasFileInfo{DriveType: 0}
-
-	// Volume creation date
-	var volStat syscall.Stat_t
-	if err := syscall.Stat(mountPoint, &volStat); err == nil {
-		info.VolCreationDate = unixToHFS(volStat.Birthtimespec.Sec)
-	}
-
-	// File CNID and creation date
-	filePath := filepath.Join(mountPoint, relativePath)
-	var fileStat syscall.Stat_t
-	if err := syscall.Stat(filePath, &fileStat); err == nil {
-		info.FileCNID = uint32(fileStat.Ino)
-		info.FileCreationDate = unixToHFS(fileStat.Birthtimespec.Sec)
-	}
-
-	// Parent directory CNID
-	parentPath := filepath.Dir(filePath)
-	var parentStat syscall.Stat_t
-	if err := syscall.Stat(parentPath, &parentStat); err == nil {
-		info.ParentCNID = uint32(parentStat.Ino)
-	}
-
-	return info
 }

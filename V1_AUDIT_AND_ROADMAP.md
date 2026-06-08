@@ -52,6 +52,16 @@ build tags + `IconPositions`)._
 > non-ASCII case-insensitive names) and resource-fork data (not needed by modern `.app`s).
 > See §5 below.
 
+> **Update 2026-06-08 — native backend wired into `dmg.Build()`.** `Options.Backend` selects
+> the image-creation backend: `BackendAuto` (default) uses hdiutil on macOS and the pure-Go
+> backend everywhere else; `BackendNative` forces pure-Go; `BackendHdiutil` forces macOS. The
+> `dmg` package was split by build tags so the hdiutil/syscall path is darwin-only and the
+> native path + shared helpers (`newStyledStore`) **cross-compile to linux/windows** — so the
+> whole package now builds off-macOS, and `dmg.Build` produces a styled DMG (background,
+> Applications link, icon layout, `.DS_Store`) entirely in Go. Verified by `TestBuildNative_EndToEnd`:
+> a signed `.app` built through the native backend passes `codesign --verify` when mounted.
+> The native backend produces UDZO/HFS+ only (other formats/APFS error and point to hdiutil).
+
 ## 1. Executive summary
 
 The library is in good shape: it builds, all tests pass, and it does something genuinely

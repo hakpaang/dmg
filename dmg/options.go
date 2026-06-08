@@ -24,6 +24,21 @@ const (
 	FSAPFS    Filesystem = "APFS"
 )
 
+// Backend selects how the disk image is created.
+type Backend int
+
+const (
+	// BackendAuto uses macOS hdiutil when available (on darwin) and otherwise
+	// falls back to the pure-Go backend. This is the default.
+	BackendAuto Backend = iota
+	// BackendNative uses the pure-Go hfsplus+udif backend. It needs no macOS
+	// tools, so it works when cross-compiled to any platform. It produces a
+	// UDZO, HFS+ image (other formats/filesystems require BackendHdiutil).
+	BackendNative
+	// BackendHdiutil uses macOS hdiutil/ditto (darwin only).
+	BackendHdiutil
+)
+
 // Options configures the DMG creation process.
 type Options struct {
 	// Volume name displayed in Finder title bar
@@ -66,6 +81,9 @@ type Options struct {
 	// This sets the icon shown on the .dmg file before it's mounted.
 	// Accepts .icns files directly, or .png/.jpg files which are auto-converted.
 	FileIcon string
+
+	// Backend selects the image-creation backend (default BackendAuto).
+	Backend Backend
 }
 
 // WindowConfig defines the Finder window position and size.

@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/leaanthony/dmg/icns"
 
 	_ "image/jpeg" // register JPEG decoder
@@ -67,7 +65,7 @@ func readIconData(path string) ([]byte, error) {
 // into the file's resource fork and setting the kHasCustomIcon flag.
 func setFileIcon(filePath string, icnsData []byte) error {
 	resFork := buildResourceFork(icnsData)
-	if err := unix.Setxattr(filePath, resourceForkXattr, resFork, 0); err != nil {
+	if err := setResourceFork(filePath, resFork); err != nil {
 		return fmt.Errorf("write resource fork: %w", err)
 	}
 	return setCustomIconFlag(filePath)

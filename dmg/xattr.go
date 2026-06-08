@@ -1,3 +1,5 @@
+//go:build !windows
+
 package dmg
 
 import "golang.org/x/sys/unix"
@@ -6,6 +8,11 @@ const (
 	finderInfoXattr   = "com.apple.FinderInfo"
 	resourceForkXattr = "com.apple.ResourceFork"
 )
+
+// setResourceFork writes the com.apple.ResourceFork extended attribute.
+func setResourceFork(path string, data []byte) error {
+	return unix.Setxattr(path, resourceForkXattr, data, 0)
+}
 
 // setCustomIconFlag sets the kHasCustomIcon bit in the com.apple.FinderInfo
 // extended attribute on the given path. This tells Finder to look for a custom
