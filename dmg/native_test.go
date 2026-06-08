@@ -82,7 +82,13 @@ func TestBuildNative_EndToEnd(t *testing.T) {
 		Files:                  map[string]string{"MyApp.app": app},
 		AddApplicationsSymlink: true,
 		Background:             &BackgroundConfig{File: bg},
-		Backend:                BackendNative,
+		// Pin both icons explicitly to exercise IconPositions through the
+		// shared .DS_Store path on the native backend.
+		IconPositions: map[string]IconPosition{
+			"MyApp.app":    {X: 150, Y: 180},
+			"Applications": {X: 390, Y: 180},
+		},
+		Backend: BackendNative,
 	}
 	if err := Build(opts); err != nil {
 		t.Fatalf("Build (native): %v", err)

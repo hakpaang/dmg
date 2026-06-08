@@ -89,6 +89,17 @@ func BuildWithContents(volumeName, outputPath string, contents []ContentItem, op
 			o.SizeHint = opts.SizeHint
 		}
 		o.Backend = opts.Backend
+		o.IconPositions = opts.IconPositions
+	}
+
+	setPosition := func(name string, item ContentItem) {
+		if item.X == 0 && item.Y == 0 {
+			return
+		}
+		if o.IconPositions == nil {
+			o.IconPositions = make(map[string]IconPosition)
+		}
+		o.IconPositions[name] = IconPosition{X: item.X, Y: item.Y}
 	}
 
 	for _, item := range contents {
@@ -97,10 +108,13 @@ func BuildWithContents(volumeName, outputPath string, contents []ContentItem, op
 			name = filepath.Base(item.Path)
 		}
 		if item.Link != "" {
-			// Links other than the Applications drop-link are not modelled here.
+			// Links other than the Applications drop-link are not modelled here,
+			// but a pinned position is still recorded by name.
+			setPosition(name, item)
 			continue
 		}
 		o.Files[name] = item.Path
+		setPosition(name, item)
 	}
 
 	return Build(o)
@@ -210,20 +224,25 @@ func newStyledStore(opts Options, bgRelativePath string, aliasInfo *dsstore.Alia
 	if opts.AddApplicationsSymlink {
 		items = append(items, "Applications")
 	}
-	positionIcons(s, items, opts.Window.Width, opts.Window.Height)
+	positionIcons(s, items, opts.Window.Width, opts.Window.Height, opts.IconPositions)
 
 	return s
 }
 
-// positionIcons sets icon positions for items, distributing them evenly
-// across the window width at ~45% of the window height.
-func positionIcons(s *dsstore.Store, items []string, windowWidth, windowHeight int) {
+// positionIcons sets icon positions for items. Items listed in explicit are
+// pinned to the given coordinates; the rest are distributed evenly across the
+// window width at ~45% of the window height.
+func positionIcons(s *dsstore.Store, items []string, windowWidth, windowHeight int, explicit map[string]IconPosition) {
 	if len(items) == 0 {
 		return
 	}
 	y := windowHeight * 45 / 100 // slightly above center for label space
 	spacing := windowWidth / (len(items) + 1)
 	for i, name := range items {
+		if pos, ok := explicit[name]; ok {
+			s.SetIconPosition(name, pos.X, pos.Y)
+			continue
+		}
 		x := spacing * (i + 1)
 		s.SetIconPosition(name, x, y)
 	}

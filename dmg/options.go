@@ -54,6 +54,11 @@ type Options struct {
 	// AddApplicationsSymlink creates a symlink to /Applications in the DMG.
 	AddApplicationsSymlink bool
 
+	// IconPositions optionally pins Finder icon locations by item name.
+	// Coordinates are in Finder window pixels and refer to the icon centre.
+	// Names not listed here are auto-positioned. Honored by both backends.
+	IconPositions map[string]IconPosition
+
 	// Window configures the Finder window geometry.
 	Window WindowConfig
 
@@ -99,6 +104,11 @@ type IconConfig struct {
 	Size      int     // Icon size in pixels (default: 128)
 	TextSize  float64 // Label text size in points (default: 12)
 	GridSpace float64 // Grid spacing between icons (default: 100, max: 100)
+}
+
+// IconPosition defines a Finder icon's centre point, in window pixels.
+type IconPosition struct {
+	X, Y int
 }
 
 // BackgroundConfig defines the Finder window background.
