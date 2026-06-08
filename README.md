@@ -1,28 +1,39 @@
 # dmg
 
-A pure Go library for creating styled macOS DMG disk images with custom Finder window appearance.
+A Go library for creating styled macOS DMG disk images with custom Finder window
+appearance — background image, icon positions, window geometry, and volume/file
+icons.
+
+It ships **two backends**:
+
+- a **pure-Go backend** (`hfsplus` + `udif`) that needs no macOS tools and works
+  when cross-compiled to **any platform** — so you can build a macOS `.dmg` from
+  a Linux or Windows CI runner; and
+- a **macOS `hdiutil` backend** for the widest format/filesystem support on macOS.
+
+By default it picks `hdiutil` on macOS and the pure-Go backend everywhere else.
 
 ## Features
 
-- Custom Finder window position and size
-- Background images (PNG, JPEG, etc.)
-- Solid color backgrounds
-- Automatic icon positioning
-- Applications symlink for drag-to-install
-- Multiple compression formats (zlib, LZFSE, LZMA, bzip2)
-- HFS+ and APFS filesystem support
-- Volume icons (icon shown when DMG is mounted)
-- DMG file icons (icon shown on the .dmg file in Finder)
+- Styled Finder window: background image, solid-color background, window
+  geometry, and per-icon positions
+- `/Applications` symlink for drag-to-install
+- Volume icons (shown when the DMG is mounted) and DMG file icons (shown on the
+  `.dmg` in Finder)
 - Accepts `.icns`, `.png`, `.jpg`, and macOS Tahoe `.icon` packages as icon input
-- Pure Go icon handling via extended attributes (no Xcode/`SetFile` dependency)
-- Pure Go .DS_Store generation (no AppleScript/Finder scripting)
-- ICNS generation from PNG images (`icns` sub-package)
+- Pure-Go `.DS_Store` generation (no AppleScript / Finder scripting)
+- Pure-Go HFS+ volume writer (`hfsplus`) and UDIF/`.dmg` container writer
+  (`udif`) — no `hdiutil` dependency, cross-compiles to any OS
+- Pure-Go ICNS generation from images (`icns` sub-package)
+- Optional macOS `hdiutil` backend for LZFSE/LZMA/bzip2 formats and APFS
 
 ## Installation
 
 ```bash
 go get github.com/leaanthony/dmg
 ```
+
+Requires Go 1.24+.
 
 ## Usage
 
@@ -49,9 +60,13 @@ func main() {
         Background: &dmg.BackgroundConfig{
             File: "/path/to/background.png",
         },
-        VolumeIcon: "icon.png",     // icon when DMG is mounted
-        FileIcon:   "icon.png",     // icon of the .dmg file in Finder
-        Format:     dmg.FormatUDZO,
+        // Pin specific icons (others are auto-positioned).
+        IconPositions: map[string]dmg.IconPosition{
+            "MyApp.app":    {X: 150, Y: 180},
+            "Applications": {X: 390, Y: 180},
+        },
+        VolumeIcon: "icon.png", // icon when the DMG is mounted
+        FileIcon:   "icon.png", // icon of the .dmg file in Finder
     }
 
     if err := dmg.Build(opts); err != nil {
@@ -60,45 +75,114 @@ func main() {
 }
 ```
 
+## Backends
+
+`Options.Backend` selects how the disk image is created:
+
+| Backend | Behaviour | Platforms |
+|---------|-----------|-----------|
+| `BackendAuto` (default) | `hdiutil` on macOS, pure-Go elsewhere | any |
+| `BackendNative` | Pure-Go `hfsplus` + `udif` | any (cross-compiles) |
+| `BackendHdiutil` | macOS `hdiutil` / `ditto` | macOS only |
+
+The **native** backend produces a case-insensitive **HFS+** volume in a **UDZO
+(zlib)** container. It supports files, nested folders, symlinks, the background
+image, volume icon, `.DS_Store` styling, and `IconPositions`. Code signatures
+on `.app` bundles are preserved (verified with `codesign --verify`).
+
+To build a macOS DMG on Linux/Windows CI, just force the native backend:
+
+```go
+opts.Backend = dmg.BackendNative
+if err := dmg.Build(opts); err != nil { /* ... */ }
+```
+
+Native-backend limitations (use `BackendHdiutil` on macOS if you need these):
+
+- UDZO format only (no LZFSE/LZMA/bzip2)
+- HFS+ only (no APFS)
+- Case-insensitive volumes currently require ASCII file names; non-ASCII names
+  need a case-sensitive volume (a full Unicode fold table is planned)
+- The icon on the `.dmg` file itself (`FileIcon`) is applied only on macOS
+
 ## Icons
 
-The library supports two distinct icon types:
+Two distinct icon types:
 
 | Icon Type | What It Is | Option |
 |-----------|-----------|--------|
 | **Volume Icon** | Shown when the DMG is mounted in Finder | `VolumeIcon` |
 | **File Icon** | Shown on the `.dmg` file itself in Finder | `FileIcon` |
 
-Both options accept any of the following formats:
+Both accept any of:
 
 | Format | Extension | Notes |
 |--------|-----------|-------|
 | ICNS | `.icns` | Used directly |
 | PNG | `.png` | Auto-converted to ICNS |
 | JPEG | `.jpg`, `.jpeg` | Auto-converted to ICNS |
-| Liquid Glass | `.icon` (directory) | macOS Tahoe format - layers composited and converted to ICNS |
+| Liquid Glass | `.icon` (directory) | macOS Tahoe format — layers composited and converted to ICNS |
 
-Icons are set using pure Go extended attribute manipulation (`com.apple.FinderInfo` and `com.apple.ResourceFork`), with no dependency on Xcode or the `SetFile` command.
+The volume icon is set via `.VolumeIcon.icns` plus the `kHasCustomIcon` Finder
+flag (encoded into the HFS+ catalog by the native backend, or set via
+`com.apple.FinderInfo` by the hdiutil backend). The DMG file icon uses a resource
+fork in the `com.apple.ResourceFork` extended attribute (macOS only).
 
-## ICNS Package
+## Sub-packages
 
-The `icns` sub-package can be used independently to create Apple Icon Image (`.icns`) files from Go images:
+These are usable on their own:
 
 ```go
-import "github.com/leaanthony/dmg/icns"
-
-// Convert a PNG file to ICNS
-err := icns.EncodeFile("output.icns", "source.png")
-
-// Or work with Go images directly
-img := loadMyImage()
-data, err := icns.IcnsFromImage(img)
-
-// Read a macOS Tahoe .icon package
-composited, err := icns.ReadDotIcon("AppIcon.icon")
+import (
+    "github.com/leaanthony/dmg/hfsplus" // pure-Go HFS+/HFSX volume writer
+    "github.com/leaanthony/dmg/udif"    // pure-Go UDIF (.dmg) container writer
+    "github.com/leaanthony/dmg/icns"    // pure-Go ICNS encoder / .icon reader
+)
 ```
 
-The encoder generates standard ICNS entries for all sizes from 16x16 up to 1024x1024, using a box-filter downscale for high quality results.
+Build a `.dmg` directly from a file tree, with no macOS dependency:
+
+```go
+vol := &hfsplus.Volume{
+    Name: "Install",
+    Children: []*hfsplus.Entry{
+        {Name: "MyApp.app", Kind: hfsplus.KindDir, Children: /* ... */},
+        {Name: "Applications", Kind: hfsplus.KindSymlink, Target: "/Applications"},
+    },
+}
+img, _ := hfsplus.Build(vol)          // raw HFS+ volume image
+f, _ := os.Create("Install.dmg")
+_ = udif.Build(f, img, "whole disk (Apple_HFS : 0)") // wrap as a .dmg
+```
+
+The `icns` sub-package creates Apple Icon Image files from Go images:
+
+```go
+err := icns.EncodeFile("output.icns", "source.png") // PNG/JPEG -> ICNS
+data, err := icns.IcnsFromImage(img)                // image.Image -> ICNS bytes
+img, err := icns.ReadDotIcon("AppIcon.icon")        // read a Tahoe .icon package
+```
+
+The encoder generates standard ICNS entries for all sizes from 16×16 to
+1024×1024 using a box-filter downscale.
+
+## Examples
+
+Runnable example programs live in [`examples/`](./examples):
+
+```sh
+# Pure-Go DMG from a directory (works on Linux/Windows/macOS):
+go run ./examples/purego-dmg ./MyApp.app MyApp.dmg MyApp
+
+# Styled DMG via the high-level API (macOS):
+go run ./examples/styled-dmg ./MyApp.app MyApp.dmg
+
+# PNG -> ICNS:
+go run ./examples/png-to-icns icon.png AppIcon.icns
+```
+
+Package-level `Example` functions (visible on pkg.go.dev) demonstrate the API
+for each package.
 
 ## API Reference
 
@@ -108,25 +192,25 @@ The encoder generates standard ICNS entries for all sizes from 16x16 up to 1024x
 |-------|------|-------------|
 | `VolumeName` | `string` | Volume name displayed in Finder title bar |
 | `OutputPath` | `string` | Output path for the final DMG file |
-| `Files` | `map[string]string` | Files to include (destination name -> source path) |
+| `Files` | `map[string]string` | Files to include (destination name → source path) |
 | `AddApplicationsSymlink` | `bool` | Create `/Applications` symlink for drag-to-install |
+| `IconPositions` | `map[string]IconPosition` | Pin Finder icon locations by name (others auto-positioned) |
 | `Window` | `WindowConfig` | Finder window position and size |
 | `Icon` | `IconConfig` | Icon appearance settings |
 | `Background` | `*BackgroundConfig` | Window background (nil for default white) |
 | `Format` | `Format` | Compression format (default: `FormatUDZO`) |
-| `Filesystem` | `Filesystem` | `FSHFSPlus` (default) or `FSAPFS` |
-| `SizeHint` | `int` | Writable DMG size in MB (0 = auto-calculated) |
+| `Filesystem` | `Filesystem` | `FSHFSPlus` (default) or `FSAPFS` (hdiutil backend) |
+| `SizeHint` | `int` | Writable DMG size in MB (0 = auto; hdiutil backend) |
 | `VolumeIcon` | `string` | Path to icon file for the mounted volume |
 | `FileIcon` | `string` | Path to icon file for the .dmg file in Finder |
+| `Backend` | `Backend` | `BackendAuto` (default), `BackendNative`, or `BackendHdiutil` |
 
 ### WindowConfig
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `X` | `int` | Window X position on screen |
-| `Y` | `int` | Window Y position on screen |
-| `Width` | `int` | Window width in pixels |
-| `Height` | `int` | Window height in pixels |
+| `X`, `Y` | `int` | Window position on screen |
+| `Width`, `Height` | `int` | Window size in pixels |
 
 ### IconConfig
 
@@ -136,28 +220,25 @@ The encoder generates standard ICNS entries for all sizes from 16x16 up to 1024x
 | `TextSize` | `float64` | Label text size in points (default: 12) |
 | `GridSpace` | `float64` | Grid spacing between icons (default: 100, max: 100) |
 
-> **Note:** macOS Finder silently rejects all icon view settings if `GridSpace` exceeds 100. Values above 100 are automatically clamped.
+> **Note:** macOS Finder silently rejects all icon view settings if `GridSpace`
+> exceeds 100.
+
+### IconPosition
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `X`, `Y` | `int` | Icon centre point, in window pixels |
 
 ### BackgroundConfig
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `File` | `string` | Path to background image (PNG, JPEG, etc.) |
-| `Color` | `*ColorRGB` | Solid color background (used when `File` is empty) |
+| `Color` | `*ColorRGB` | Solid color background (used when `File` is empty; components 0.0–1.0) |
 
 When neither `File` nor `Color` is set, the DMG uses a default white background.
 
-### ColorRGB
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `R` | `float64` | Red component (0.0 - 1.0) |
-| `G` | `float64` | Green component (0.0 - 1.0) |
-| `B` | `float64` | Blue component (0.0 - 1.0) |
-
 ### Background Image Helpers
-
-The library includes helper functions for generating background images:
 
 ```go
 // Solid color background
@@ -165,31 +246,34 @@ dmg.SolidBackground(width, height int, c color.Color, path string) error
 
 // Gradient background
 dmg.GradientBackground(width, height int, from, to color.Color,
-    direction GradientDirection, path string) error
+    direction dmg.GradientDirection, path string) error
 
 // Installer-style background with icon wells and arrow
 dmg.InstallerBackground(width, height int, from, to color.Color,
-    slots []IconSlot, iconSize int, path string) error
+    slots []dmg.IconSlot, iconSize int, path string) error
 ```
 
 ## Compression Formats
 
+The native backend produces `FormatUDZO` only. The hdiutil backend (macOS)
+supports all of:
+
 | Format | Constant | Notes |
 |--------|----------|-------|
-| zlib | `FormatUDZO` | Maximum compatibility (default) |
-| LZFSE | `FormatULFO` | Good balance, macOS 10.11+ |
-| LZMA | `FormatULMO` | Smallest output, slower |
-| bzip2 | `FormatUDBZ` | Deprecated |
-| Uncompressed | `FormatUDRW` | For development |
+| zlib | `FormatUDZO` | Maximum compatibility (default; pure-Go capable) |
+| LZFSE | `FormatULFO` | Good balance, macOS 10.11+ (hdiutil) |
+| LZMA | `FormatULMO` | Smallest output, slower (hdiutil) |
+| bzip2 | `FormatUDBZ` | Deprecated (hdiutil) |
+| Uncompressed | `FormatUDRW` | For development (hdiutil) |
 
 ## CLI Tool
 
-The `mkdmg` command-line tool provides a quick way to create DMGs:
+The `mkdmg` command provides a quick way to create DMGs:
 
 ```bash
 go install github.com/leaanthony/dmg/cmd/mkdmg@latest
 
-mkdmg -app /path/to/MyApp.app -output MyApp.dmg \
+mkdmg -volname MyApp -app /path/to/MyApp.app -output MyApp.dmg \
   -volume-icon icon.png \
   -file-icon icon.png \
   -background bg.png
@@ -215,22 +299,29 @@ Or use a JSON config file:
 mkdmg -config dmg.json
 ```
 
-## Requirements
+## Platform support
 
-- macOS (uses `hdiutil` for DMG creation)
-- Go 1.21+
+| Task | Pure-Go (native) backend | hdiutil backend |
+|------|--------------------------|-----------------|
+| Create a styled `.dmg` | any OS (cross-compiles) | macOS only |
+| Output format | UDZO / HFS+ | all formats, HFS+ & APFS |
+| `.DS_Store` + ICNS generation | pure Go | pure Go |
+
+The pure-Go backend has no cgo and no external tool dependencies.
 
 ## How It Works
 
-Instead of using AppleScript or Finder automation (which is slow and fragile), this library generates .DS_Store files directly in pure Go. The .DS_Store binary format uses a buddy allocator with a B-tree index, containing records that control Finder's window appearance:
+Instead of AppleScript or Finder automation (slow and fragile), this library
+generates `.DS_Store` files directly in pure Go. The `.DS_Store` binary format
+uses a buddy allocator with a B-tree index, holding records that control
+Finder's window appearance: `bwsp` (window position/size), `icvp` (icon view
+settings), `icvl` (view type), `vSrn` (version marker), and `Iloc` (individual
+icon positions).
 
-- `bwsp` - Window position and size
-- `icvp` - Icon view settings (size, text, background)
-- `icvl` - Default view type
-- `vSrn` - Version marker
-- `Iloc` - Individual icon positions
-
-Volume icons are set by writing `.VolumeIcon.icns` to the volume root and setting the `kHasCustomIcon` flag in `com.apple.FinderInfo`. File icons use a Classic Mac OS resource fork written to the `com.apple.ResourceFork` extended attribute. Both are handled in pure Go with no dependency on Xcode tools.
+The native backend additionally writes the HFS+ volume and the UDIF (`.dmg`)
+container itself in pure Go (clean-room implementations from Apple's TN1150 and
+the public UDIF format), so no `hdiutil` is required and the whole pipeline
+cross-compiles to any platform.
 
 ## License
 
