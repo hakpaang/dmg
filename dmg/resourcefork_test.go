@@ -38,6 +38,11 @@ func TestBuildResourceFork_Structure(t *testing.T) {
 	if mapSize != 50 {
 		t.Errorf("map size: expected 50, got %d", mapSize)
 	}
+	for i := 0; i < 16; i++ {
+		if result[int(mapOffset)+i] != result[i] {
+			t.Errorf("resource map header byte %d does not match resource header", i)
+		}
+	}
 
 	// Verify data area contains the ICNS payload
 	pos := 256

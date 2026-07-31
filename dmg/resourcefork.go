@@ -38,7 +38,9 @@ func buildResourceFork(icnsData []byte) []byte {
 
 	// === Resource Map (at mapOffset) ===
 	pos = mapOffset
-	// bytes 0-15: header copy (zero is fine)
+	// The resource map begins with an exact copy of the resource header.
+	// Finder rejects the resource fork when these bytes are left zeroed.
+	copy(buf[pos:pos+16], buf[:16])
 	// bytes 16-19: next resource map handle (zero)
 	// bytes 20-21: file reference number (zero)
 	// bytes 22-23: resource file attributes (zero)
