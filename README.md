@@ -323,6 +323,15 @@ container itself in pure Go (clean-room implementations from Apple's TN1150 and
 the public UDIF format), so no `hdiutil` is required and the whole pipeline
 cross-compiles to any platform.
 
+## Contributing
+
+Issues are not accepted for this project. Fixes are welcome as pull requests.
+
+If you encounter a bug but cannot provide a fix, please open a pull request
+that adds a focused failing test demonstrating the problem. This gives the
+issue a reproducible form and makes it straightforward for a contributor to
+implement and verify the fix.
+
 ## License
 
 MIT
