@@ -3,7 +3,7 @@ package dmg
 import "encoding/binary"
 
 // buildResourceFork constructs a Classic Mac OS resource fork containing
-// a single 'icns' resource with the magic ID -16455 (0xBFC9). This is the
+// a single 'icns' resource with the magic ID -16455 (0xBFB9). This is the
 // format Finder expects when looking for a custom icon on a file.
 //
 // Resource fork layout:
@@ -58,7 +58,7 @@ func buildResourceFork(icnsData []byte) []byte {
 
 	// === Reference List Entry (at type list + 10) ===
 	rlPos := tlPos + 10
-	binary.BigEndian.PutUint16(buf[rlPos:rlPos+2], 0xBFC9) // resource ID -16455
+	binary.BigEndian.PutUint16(buf[rlPos:rlPos+2], 0xBFB9) // resource ID -16455
 	binary.BigEndian.PutUint16(buf[rlPos+2:rlPos+4], 0xFFFF) // no name
 	buf[rlPos+4] = 0                                           // attributes
 	// bytes 5-7: 3-byte offset from data area start to this resource (0)

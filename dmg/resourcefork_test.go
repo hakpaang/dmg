@@ -95,8 +95,8 @@ func TestBuildResourceFork_Structure(t *testing.T) {
 	// Reference entry
 	rlPos := tlPos + 10
 	resID := binary.BigEndian.Uint16(result[rlPos : rlPos+2])
-	if resID != 0xBFC9 {
-		t.Errorf("resource ID: expected 0xBFC9 (-16455), got 0x%04X", resID)
+	if resID != 0xBFB9 {
+		t.Errorf("resource ID: expected 0xBFB9 (-16455), got 0x%04X", resID)
 	}
 
 	nameOffset := binary.BigEndian.Uint16(result[rlPos+2 : rlPos+4])
