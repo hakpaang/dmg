@@ -67,16 +67,17 @@ func TestHFSXMountedNames(t *testing.T) {
 	for _, backend := range []Backend{BackendNative, BackendHdiutil} {
 		t.Run(map[Backend]string{BackendNative: "native", BackendHdiutil: "hdiutil"}[backend], func(t *testing.T) {
 			dir := t.TempDir()
-			app := filepath.Join(dir, "\u793a\u4f8b.app")
+			appName := "\u793a\u4f8b-caf\u00e9-\uac00.app"
+			app := filepath.Join(dir, appName)
 			if err := os.Mkdir(app, 0755); err != nil {
 				t.Fatal(err)
 			}
-			files := map[string]string{"\u793a\u4f8b.app": app}
+			files := map[string]string{appName: app}
 			if err := os.WriteFile(filepath.Join(app, "\u6587\u4ef6.txt"), []byte("\u6587\u4ef6.txt"), 0755); err != nil {
 				t.Fatal(err)
 			}
 			// Separate source names also work on case-insensitive host filesystems.
-			for i, name := range []string{"Case.txt", "case.txt"} {
+			for i, name := range []string{"Case.txt", "case.txt", "caf\u00e9.txt", "\uac00\uac01.txt", "\U0001d15e.txt", "a\u0301\U0001d165\u0327.txt"} {
 				src := filepath.Join(dir, fmt.Sprintf("source-%d", i))
 				if err := os.WriteFile(src, []byte(name), 0755); err != nil {
 					t.Fatal(err)
@@ -84,7 +85,7 @@ func TestHFSXMountedNames(t *testing.T) {
 				files[name] = src
 			}
 			out := filepath.Join(dir, "test.dmg")
-			if err := Build(Options{VolumeName: "Unicode Test", OutputPath: out, Files: files, Filesystem: FSHFSX, Backend: backend, AddApplicationsSymlink: true}); err != nil {
+			if err := Build(Options{VolumeName: "Unicode caf\u00e9 \uac00", OutputPath: out, Files: files, Filesystem: FSHFSX, Backend: backend, AddApplicationsSymlink: true}); err != nil {
 				t.Fatal(err)
 			}
 			if o, err := exec.Command("hdiutil", "verify", out).CombinedOutput(); err != nil {
@@ -99,10 +100,10 @@ func TestHFSXMountedNames(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			for _, name := range []string{"\u6587\u4ef6.txt", "Case.txt", "case.txt"} {
+			for _, name := range []string{"\u6587\u4ef6.txt", "Case.txt", "case.txt", "caf\u00e9.txt", "\uac00\uac01.txt", "\U0001d15e.txt", "a\u0301\U0001d165\u0327.txt"} {
 				path := filepath.Join(mnt, name)
 				if name == "\u6587\u4ef6.txt" {
-					path = filepath.Join(mnt, "\u793a\u4f8b.app", name)
+					path = filepath.Join(mnt, appName, name)
 				}
 				data, err := os.ReadFile(path)
 				if err != nil || string(data) != name {
