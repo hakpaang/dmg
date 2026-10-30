@@ -85,7 +85,8 @@ func main() {
 | `BackendNative` | Pure-Go `hfsplus` + `udif` | any (cross-compiles) |
 | `BackendHdiutil` | macOS `hdiutil` / `ditto` | macOS only |
 
-The **native** backend produces a case-insensitive **HFS+** volume in a **UDZO
+The **native** backend produces a case-insensitive **HFS+** volume by default,
+or a case-sensitive **HFSX** volume when `Filesystem` is `FSHFSX`, in a **UDZO
 (zlib)** container. It supports files, nested folders, symlinks, the background
 image, volume icon, `.DS_Store` styling, and `IconPositions`. Code signatures
 on `.app` bundles are preserved (verified with `codesign --verify`).
@@ -199,7 +200,7 @@ for each package.
 | `Icon` | `IconConfig` | Icon appearance settings |
 | `Background` | `*BackgroundConfig` | Window background (nil for default white) |
 | `Format` | `Format` | Compression format (default: `FormatUDZO`) |
-| `Filesystem` | `Filesystem` | `FSHFSPlus` (default) or `FSAPFS` (hdiutil backend) |
+| `Filesystem` | `Filesystem` | `FSHFSPlus` (default), `FSHFSX` (case-sensitive), or `FSAPFS` (hdiutil backend) |
 | `SizeHint` | `int` | Writable DMG size in MB (0 = auto; hdiutil backend) |
 | `VolumeIcon` | `string` | Path to icon file for the mounted volume |
 | `FileIcon` | `string` | Path to icon file for the .dmg file in Finder |
@@ -331,7 +332,7 @@ are supported) and explicit positions, for example:
 | Task | Pure-Go (native) backend | hdiutil backend |
 |------|--------------------------|-----------------|
 | Create a styled `.dmg` | any OS (cross-compiles) | macOS only |
-| Output format | UDZO / HFS+ | all formats, HFS+ & APFS |
+| Output format | UDZO / HFS+ & HFSX | all formats, HFS+, HFSX & APFS |
 | `.DS_Store` + ICNS generation | pure Go | pure Go |
 
 The pure-Go backend has no cgo and no external tool dependencies.
