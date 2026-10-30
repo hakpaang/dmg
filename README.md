@@ -100,7 +100,7 @@ if err := dmg.Build(opts); err != nil { /* ... */ }
 Native-backend limitations (use `BackendHdiutil` on macOS if you need these):
 
 - UDZO format only (no LZFSE/LZMA/bzip2)
-- HFS+ only (no APFS)
+- HFS+ and HFSX only (no APFS)
 - Case-insensitive volumes currently require ASCII file names; non-ASCII names
   need a case-sensitive volume (a full Unicode fold table is planned)
 - The icon on the `.dmg` file itself (`FileIcon`) is applied only on macOS
@@ -297,6 +297,33 @@ Or use a JSON config file:
 
 ```bash
 mkdmg -config dmg.json
+```
+
+### HFSX and CLI backend selection
+
+Use HFSX for non-ASCII filenames with the native backend:
+
+```sh
+mkdmg -backend native -fs HFSX -volname "Example" -app "Example.app" -output "Example.dmg"
+```
+
+Both backends support HFSX. Unsupported filesystem names return an error.
+JSON configuration also accepts `"backend": "native"` (`auto` and `hdiutil`
+are supported) and explicit positions, for example:
+
+```json
+{
+  "volume_name": "Example",
+  "output": "Example.dmg",
+  "filesystem": "HFSX",
+  "backend": "native",
+  "files": {"Example.app": "Example.app"},
+  "applications_symlink": true,
+  "icon_positions": {
+    "Example.app": {"x": 170, "y": 160},
+    "Applications": {"x": 470, "y": 160}
+  }
+}
 ```
 
 ## Platform support
